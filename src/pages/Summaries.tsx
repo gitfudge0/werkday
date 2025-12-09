@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { format, addDays, differenceInDays } from 'date-fns'
 import { DateRange } from 'react-day-picker'
 import { 
   FileText, 
@@ -14,7 +13,6 @@ import {
   ArrowRightLeft,
   Timer,
   StickyNote,
-  CalendarIcon,
   Clock,
   TrendingUp,
   CheckCircle2,
@@ -22,8 +20,7 @@ import {
   RefreshCw
 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
-import { Calendar } from '@/components/ui/calendar'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { DateRangePicker } from '@/components/ui/date-range-picker'
 
 interface GitHubActivity {
   id: string
@@ -92,8 +89,6 @@ export function Summaries() {
     from: new Date(),
     to: new Date()
   })
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
-  const [isSelectingRange, setIsSelectingRange] = useState(false)
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -107,46 +102,6 @@ export function Summaries() {
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     return `${year}-${month}-${day}`
-  }
-
-  // Format date range for display
-  const formatDateRangeForDisplay = (range: DateRange | undefined): string => {
-    if (!range?.from) return 'Select dates'
-    
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(yesterday.getDate() - 1)
-    
-    const formatSingleDate = (date: Date): string => {
-      if (date.toDateString() === today.toDateString()) {
-        return 'Today'
-      } else if (date.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday'
-      }
-      return format(date, 'MMM d')
-    }
-    
-    if (!range.to || range.from.toDateString() === range.to.toDateString()) {
-      // Single date
-      if (range.from.toDateString() === today.toDateString()) {
-        return 'Today'
-      } else if (range.from.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday'
-      }
-      return format(range.from, 'EEEE, MMMM d, yyyy')
-    }
-    
-    // Date range
-    return `${formatSingleDate(range.from)} - ${formatSingleDate(range.to)}`
-  }
-
-  // Get number of days in range
-  const getDaysInRange = (): number => {
-    if (!dateRange?.from) return 0
-    if (!dateRange.to || dateRange.from.toDateString() === dateRange.to.toDateString()) {
-      return 1
-    }
-    return differenceInDays(dateRange.to, dateRange.from) + 1
   }
 
   useEffect(() => {
@@ -253,28 +208,6 @@ export function Summaries() {
     }
   }
 
-  const handleDateSelect = (range: DateRange | undefined) => {
-    setDateRange(range)
-    
-    // Track if we're in the middle of selecting a range
-    if (!isSelectingRange && range?.from) {
-      // First click - start selecting
-      setIsSelectingRange(true)
-    } else if (isSelectingRange && range?.from && range?.to) {
-      // Second click - range complete, close popover
-      setIsSelectingRange(false)
-      setIsCalendarOpen(false)
-    }
-  }
-
-  // Reset selecting state when calendar opens
-  const handleCalendarOpenChange = (open: boolean) => {
-    setIsCalendarOpen(open)
-    if (open) {
-      setIsSelectingRange(false)
-    }
-  }
-
   // Calculate totals
   const totalGitHub = summary ? summary.github.commits + summary.github.pullRequests + summary.github.reviews : 0
   const totalJira = summary ? summary.jira.issuesWorkedOn + summary.jira.transitions + summary.jira.comments + summary.jira.worklogs : 0
@@ -347,70 +280,10 @@ export function Summaries() {
           </button>
 
           {/* Date Range Picker */}
-          <Popover open={isCalendarOpen} onOpenChange={handleCalendarOpenChange}>
-            <PopoverTrigger asChild>
-              <button className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50">
-                <CalendarIcon size={16} className="text-muted-foreground" />
-                {formatDateRangeForDisplay(dateRange)}
-                {getDaysInRange() > 1 && (
-                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
-                    {getDaysInRange()} days
-                  </span>
-                )}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar
-                key={isCalendarOpen ? 'open' : 'closed'}
-                mode="range"
-                selected={dateRange}
-                onSelect={handleDateSelect}
-                defaultMonth={dateRange?.from}
-                disabled={(date) => date > new Date()}
-                numberOfMonths={2}
-                initialFocus
-              />
-              <div className="border-t border-border p-3 flex items-center justify-between">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      setDateRange({ from: today, to: today })
-                      setIsSelectingRange(false)
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Today
-                  </button>
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      const weekAgo = addDays(today, -6)
-                      setDateRange({ from: weekAgo, to: today })
-                      setIsSelectingRange(false)
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Last 7 days
-                  </button>
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      const monthAgo = addDays(today, -29)
-                      setDateRange({ from: monthAgo, to: today })
-                      setIsSelectingRange(false)
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Last 30 days
-                  </button>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <DateRangePicker
+            value={dateRange}
+            onChange={setDateRange}
+          />
         </div>
       </div>
 

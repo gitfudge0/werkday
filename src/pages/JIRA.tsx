@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { format, addDays, differenceInDays } from 'date-fns'
+import { addDays, format, differenceInDays } from 'date-fns'
 import { DateRange } from 'react-day-picker'
 import { 
   Ticket, 
@@ -11,13 +11,11 @@ import {
   Settings,
   Loader2,
   ArrowRight,
-  CalendarIcon,
   MessageSquare,
   Timer
 } from 'lucide-react'
 import { formatDistanceToNow } from '../lib/utils'
-import { Calendar } from '../components/ui/calendar'
-import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
+import { DateRangePicker } from '../components/ui/date-range-picker'
 
 interface JiraActivity {
   id: string
@@ -58,11 +56,9 @@ interface ActivityResponse {
 export function JIRA() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
     const today = new Date()
-    const weekAgo = new Date(today)
-    weekAgo.setDate(weekAgo.getDate() - 6)
+    const weekAgo = addDays(today, -6)
     return { from: weekAgo, to: today }
   })
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -106,7 +102,6 @@ export function JIRA() {
     }
     
     if (!range.to || range.from.toDateString() === range.to.toDateString()) {
-      // Single date
       if (range.from.toDateString() === today.toDateString()) {
         return 'Today'
       } else if (range.from.toDateString() === yesterday.toDateString()) {
@@ -115,7 +110,6 @@ export function JIRA() {
       return format(range.from, 'MMM d, yyyy')
     }
     
-    // Date range
     return `${formatSingleDate(range.from)} - ${formatSingleDate(range.to)}`
   }
 
@@ -298,14 +292,6 @@ export function JIRA() {
     await syncActivity()
   }
 
-  const handleDateSelect = (range: DateRange | undefined) => {
-    setDateRange(range)
-    // Close popover when both dates are selected
-    if (range?.from && range?.to) {
-      setIsCalendarOpen(false)
-    }
-  }
-
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'issue':
@@ -433,69 +419,10 @@ export function JIRA() {
           </button>
 
           {/* Date Range Picker */}
-          <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-            <PopoverTrigger asChild>
-              <button
-                className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <CalendarIcon size={16} className="text-muted-foreground" />
-                {formatDateRangeForDisplay(dateRange)}
-                {getDaysInRange() > 1 && (
-                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
-                    {getDaysInRange()} days
-                  </span>
-                )}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar
-                key={isCalendarOpen ? 'open' : 'closed'}
-                mode="range"
-                selected={dateRange}
-                onSelect={handleDateSelect}
-                defaultMonth={dateRange?.from}
-                disabled={(date) => date > new Date()}
-                numberOfMonths={2}
-                initialFocus
-              />
-              <div className="border-t border-border p-3 flex items-center justify-between">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      setDateRange({ from: today, to: today })
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Today
-                  </button>
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      const weekAgo = addDays(today, -6)
-                      setDateRange({ from: weekAgo, to: today })
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Last 7 days
-                  </button>
-                  <button
-                    onClick={() => {
-                      const today = new Date()
-                      const monthAgo = addDays(today, -29)
-                      setDateRange({ from: monthAgo, to: today })
-                      setIsCalendarOpen(false)
-                    }}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
-                  >
-                    Last 30 days
-                  </button>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <DateRangePicker
+            value={dateRange}
+            onChange={setDateRange}
+          />
         </div>
       </div>
 

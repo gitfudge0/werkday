@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { DateRange } from 'react-day-picker'
+import { addDays } from 'date-fns'
 import { 
   GitCommit, 
   GitPullRequest, 
   GitMerge,
   MessageSquare,
-  ChevronDown,
   RefreshCw,
   ExternalLink,
   AlertCircle,
@@ -15,6 +16,7 @@ import {
   Loader2
 } from 'lucide-react'
 import { formatDistanceToNow } from '../lib/utils'
+import { DateRangePicker } from '../components/ui/date-range-picker'
 
 interface GitHubActivity {
   id: string
@@ -37,7 +39,12 @@ interface ActivityResponse {
 }
 
 export function GitHub() {
-  const [selectedDate, setSelectedDate] = useState<string>('Last 7 Days')
+  // Default to last 7 days
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
+    const today = new Date()
+    const weekAgo = addDays(today, -6)
+    return { from: weekAgo, to: today }
+  })
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -45,42 +52,19 @@ export function GitHub() {
   const [activities, setActivities] = useState<GitHubActivity[]>([])
   const [lastSync, setLastSync] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  
-  const dateOptions = ['Today', 'Yesterday', 'This Week', 'Last 7 Days', 'This Month']
 
-  // Calculate 'since' date based on selection
-  const getSinceDate = useCallback((option: string): string => {
-    const now = new Date()
-    switch (option) {
-      case 'Today':
-        now.setHours(0, 0, 0, 0)
-        return now.toISOString()
-      case 'Yesterday':
-        now.setDate(now.getDate() - 1)
-        now.setHours(0, 0, 0, 0)
-        return now.toISOString()
-      case 'This Week':
-        now.setDate(now.getDate() - now.getDay())
-        now.setHours(0, 0, 0, 0)
-        return now.toISOString()
-      case 'Last 7 Days':
-        now.setDate(now.getDate() - 7)
-        return now.toISOString()
-      case 'This Month':
-        now.setDate(1)
-        now.setHours(0, 0, 0, 0)
-        return now.toISOString()
-      default:
-        now.setHours(0, 0, 0, 0)
-        return now.toISOString()
-    }
-  }, [])
+  // Format date for API
+  const formatDateForApi = (date: Date): string => {
+    return date.toISOString()
+  }
 
   // Fetch GitHub activity
   const fetchActivity = useCallback(async (forceRefresh = false) => {
+    if (!dateRange?.from) return
+    
     try {
       setError(null)
-      const since = getSinceDate(selectedDate)
+      const since = formatDateForApi(dateRange.from)
       const cacheParam = forceRefresh ? '&cache=false' : ''
       
       const response = await fetch(
@@ -97,19 +81,28 @@ export function GitHub() {
       
       const data: ActivityResponse = await response.json()
       
-      // Combine all activities
-      const allActivities: GitHubActivity[] = [
+      // Combine all activities and filter by date range
+      let allActivities: GitHubActivity[] = [
         ...data.commits,
         ...data.pullRequests,
         ...data.reviews
-      ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      ]
+      
+      // Filter by end date if specified
+      if (dateRange.to) {
+        const endDate = new Date(dateRange.to)
+        endDate.setHours(23, 59, 59, 999)
+        allActivities = allActivities.filter(a => new Date(a.date) <= endDate)
+      }
+      
+      allActivities.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       
       setActivities(allActivities)
       setLastSync(data.lastSync)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch activity')
     }
-  }, [selectedDate, getSinceDate])
+  }, [dateRange])
 
   // Check connection status and fetch initial data
   useEffect(() => {
@@ -138,7 +131,7 @@ export function GitHub() {
     if (isConnected && !isLoading) {
       fetchActivity()
     }
-  }, [selectedDate, isConnected, fetchActivity])
+  }, [dateRange, isConnected, fetchActivity])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -263,24 +256,11 @@ export function GitHub() {
             Sync
           </button>
 
-          {/* Date Filter */}
-          <div className="relative">
-            <select
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="appearance-none rounded-lg border border-border bg-card px-4 py-2 pr-10 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50"
-            >
-              {dateOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-            <ChevronDown 
-              size={16} 
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" 
-            />
-          </div>
+          {/* Date Range Picker */}
+          <DateRangePicker
+            value={dateRange}
+            onChange={setDateRange}
+          />
         </div>
       </div>
 
@@ -341,7 +321,7 @@ export function GitHub() {
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <GitCommit size={32} className="mb-4 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No activity found for {selectedDate.toLowerCase()}.
+              No activity found for this period.
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               Try selecting a different time range.
