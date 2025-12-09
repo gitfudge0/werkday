@@ -101,8 +101,13 @@ export function Settings() {
     loadConfig()
   }, [])
 
-  const fetchOrganizations = async (accessToken: string) => {
+  const fetchOrganizations = async (accessToken: string, clearCache = false) => {
     setLoadingOrgs(true)
+    // Clear cached repositories when refreshing
+    if (clearCache) {
+      setRepositories({})
+      setExpandedOrgs([])
+    }
     try {
       const response = await fetch('http://localhost:3001/api/github/orgs', {
         headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -126,7 +131,11 @@ export function Settings() {
       })
       if (response.ok) {
         const repos = await response.json()
-        setRepositories(prev => ({ ...prev, [org]: repos }))
+        // Sort repositories alphabetically by name
+        const sortedRepos = repos.sort((a: Repository, b: Repository) => 
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+        )
+        setRepositories(prev => ({ ...prev, [org]: sortedRepos }))
       }
     } catch (error) {
       console.error('Failed to fetch repos:', error)
@@ -390,7 +399,7 @@ export function Settings() {
                   </p>
                 </div>
                 <button
-                  onClick={() => fetchOrganizations(token)}
+                  onClick={() => fetchOrganizations(token, true)}
                   disabled={loadingOrgs}
                   className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
                 >
