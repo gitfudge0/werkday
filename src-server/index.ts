@@ -490,22 +490,47 @@ function extractTextFromADF(adf: any): string {
   return adf.content.map(extractFromNode).join('\n').trim()
 }
 
-// Get JIRA activity for a date (reads from local cache only)
+// Get JIRA activity for a date range (reads from local cache only)
 api.get('/jira/activity', async (c) => {
   const config = await getConfig()
-  const date = c.req.query('date') || new Date().toISOString().split('T')[0]
+  const fromDate = c.req.query('from') || c.req.query('date') || new Date().toISOString().split('T')[0]
+  const toDate = c.req.query('to') || fromDate
   
   if (!config.jira.domain || !config.jira.email || !config.jira.apiToken || !config.jira.accountId) {
     return c.json({ error: 'Not authenticated' }, 401)
   }
 
-  // Read from local cache
-  const cachedData = await getJiraDailyData(date)
-  
-  if (!cachedData) {
-    // No data synced for this date
+  // Generate all dates in range
+  const dates: string[] = []
+  const current = new Date(fromDate)
+  const end = new Date(toDate)
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0])
+    current.setDate(current.getDate() + 1)
+  }
+
+  // Read from local cache for all dates
+  let allActivities: JiraActivity[] = []
+  let latestSyncedAt: string | null = null
+  let allSynced = true
+
+  for (const date of dates) {
+    const cachedData = await getJiraDailyData(date)
+    if (!cachedData) {
+      allSynced = false
+    } else {
+      allActivities = allActivities.concat(cachedData.activities)
+      if (!latestSyncedAt || (cachedData.syncedAt && cachedData.syncedAt > latestSyncedAt)) {
+        latestSyncedAt = cachedData.syncedAt
+      }
+    }
+  }
+
+  if (!allSynced || allActivities.length === 0) {
+    // No data synced for this date range
     return c.json({
-      date,
+      from: fromDate,
+      to: toDate,
       synced: false,
       syncedAt: null,
       issues: [],
@@ -522,29 +547,50 @@ api.get('/jira/activity', async (c) => {
     })
   }
 
+  // Dedupe activities by id
+  const seenIds = new Set<string>()
+  allActivities = allActivities.filter(a => {
+    if (seenIds.has(a.id)) return false
+    seenIds.add(a.id)
+    return true
+  })
+
   // Return cached data
-  const issues = cachedData.activities.filter(a => a.type === 'issue')
-  const transitions = cachedData.activities.filter(a => a.type === 'transition')
-  const comments = cachedData.activities.filter(a => a.type === 'comment')
-  const worklogs = cachedData.activities.filter(a => a.type === 'worklog')
+  const issues = allActivities.filter(a => a.type === 'issue')
+  const transitions = allActivities.filter(a => a.type === 'transition')
+  const comments = allActivities.filter(a => a.type === 'comment')
+  const worklogs = allActivities.filter(a => a.type === 'worklog')
+
+  // Calculate totals
+  const uniqueIssues = new Set(allActivities.map(a => a.issueKey))
+  const totalTimeSeconds = worklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+  const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
 
   return c.json({
-    date,
+    from: fromDate,
+    to: toDate,
     synced: true,
-    syncedAt: cachedData.syncedAt,
+    syncedAt: latestSyncedAt,
     issues,
     transitions,
     comments,
     worklogs,
-    summary: cachedData.summary,
+    summary: {
+      issuesWorkedOn: uniqueIssues.size,
+      transitionsMade: transitions.length,
+      commentsMade: comments.length,
+      worklogsAdded: worklogs.length,
+      totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
+    },
   })
 })
 
-// Sync JIRA activity for a date (fetches from JIRA API and saves to local cache)
+// Sync JIRA activity for a date range (fetches from JIRA API and saves to local cache)
 api.post('/jira/sync', async (c) => {
   const config = await getConfig()
   const body = await c.req.json().catch(() => ({}))
-  const date = body.date || new Date().toISOString().split('T')[0]
+  const fromDate = body.from || body.date || new Date().toISOString().split('T')[0]
+  const toDate = body.to || fromDate
   
   if (!config.jira.domain || !config.jira.email || !config.jira.apiToken || !config.jira.accountId) {
     return c.json({ error: 'Not authenticated' }, 401)
@@ -557,179 +603,215 @@ api.post('/jira/sync', async (c) => {
     const accountId = config.jira.accountId
     const projects = config.jira.projects
 
-    // Calculate next day for date range query
-    const nextDay = new Date(date)
-    nextDay.setDate(nextDay.getDate() + 1)
-    const nextDayStr = nextDay.toISOString().split('T')[0]
-
-    // Build JQL query - get ALL issues updated on the date, then filter by who made changes
-    // This catches issues where user made changes but isn't the assignee
-    let jql = `updated >= "${date}" AND updated < "${nextDayStr}"`
-    if (projects.length > 0) {
-      jql += ` AND project IN (${projects.map(p => `"${p}"`).join(', ')})`
+    // Generate all dates in range
+    const dates: string[] = []
+    const current = new Date(fromDate)
+    const end = new Date(toDate)
+    while (current <= end) {
+      dates.push(current.toISOString().split('T')[0])
+      current.setDate(current.getDate() + 1)
     }
-    jql += ' ORDER BY updated DESC'
 
-    // Log the JQL query for debugging
-    console.log('[JIRA Sync] JQL Query:', jql)
-    console.log('[JIRA Sync] Filtering for accountId:', accountId)
+    console.log('[JIRA Sync] Syncing', dates.length, 'days:', fromDate, 'to', toDate)
 
-    // Search for issues updated on the specified date (using new /search/jql API)
-    // Include comment and worklog fields
-    const searchResult = await jiraFetch(
-      `/search/jql`,
-      domain,
-      email,
-      apiToken,
-      'POST',
-      {
-        jql,
-        maxResults: 100,
-        fields: ['summary', 'status', 'project', 'updated', 'created', 'comment', 'worklog'],
-        expand: 'changelog'
+    // Sync each day individually
+    let allActivities: JiraActivity[] = []
+    let latestSyncedAt: string | null = null
+
+    for (const date of dates) {
+      // Calculate next day for date range query
+      const nextDay = new Date(date)
+      nextDay.setDate(nextDay.getDate() + 1)
+      const nextDayStr = nextDay.toISOString().split('T')[0]
+
+      // Build JQL query - get ALL issues updated on the date, then filter by who made changes
+      let jql = `updated >= "${date}" AND updated < "${nextDayStr}"`
+      if (projects.length > 0) {
+        jql += ` AND project IN (${projects.map(p => `"${p}"`).join(', ')})`
       }
-    )
+      jql += ' ORDER BY updated DESC'
 
-    const activities: JiraActivity[] = []
-    const baseUrl = `https://${domain}.atlassian.net`
-    const issuesWithUserActivity = new Set<string>()
+      console.log('[JIRA Sync] JQL Query for', date, ':', jql)
 
-    for (const issue of searchResult.issues || []) {
-      let hasUserActivity = false
+      // Search for issues updated on the specified date
+      const searchResult = await jiraFetch(
+        `/search/jql`,
+        domain,
+        email,
+        apiToken,
+        'POST',
+        {
+          jql,
+          maxResults: 100,
+          fields: ['summary', 'status', 'project', 'updated', 'created', 'comment', 'worklog'],
+          expand: 'changelog'
+        }
+      )
 
-      // Check changelog for changes made by the user on the target date
-      if (issue.changelog?.histories) {
-        for (const history of issue.changelog.histories) {
-          const historyDate = new Date(history.created).toISOString().split('T')[0]
-          if (historyDate === date && history.author?.accountId === accountId) {
-            hasUserActivity = true
-            for (const item of history.items || []) {
-              if (item.field === 'status') {
-                activities.push({
-                  id: `transition-${issue.id}-${history.id}`,
-                  type: 'transition',
-                  issueKey: issue.key,
-                  issueSummary: issue.fields.summary,
-                  project: issue.fields.project.key,
-                  date: history.created,
-                  url: `${baseUrl}/browse/${issue.key}`,
-                  author: history.author?.displayName,
-                  details: {
-                    fromStatus: item.fromString,
-                    toStatus: item.toString,
-                  },
-                })
+      const dayActivities: JiraActivity[] = []
+      const baseUrl = `https://${domain}.atlassian.net`
+      const issuesWithUserActivity = new Set<string>()
+
+      for (const issue of searchResult.issues || []) {
+        let hasUserActivity = false
+
+        // Check changelog for changes made by the user on the target date
+        if (issue.changelog?.histories) {
+          for (const history of issue.changelog.histories) {
+            const historyDate = new Date(history.created).toISOString().split('T')[0]
+            if (historyDate === date && history.author?.accountId === accountId) {
+              hasUserActivity = true
+              for (const item of history.items || []) {
+                if (item.field === 'status') {
+                  dayActivities.push({
+                    id: `transition-${issue.id}-${history.id}`,
+                    type: 'transition',
+                    issueKey: issue.key,
+                    issueSummary: issue.fields.summary,
+                    project: issue.fields.project.key,
+                    date: history.created,
+                    url: `${baseUrl}/browse/${issue.key}`,
+                    author: history.author?.displayName,
+                    details: {
+                      fromStatus: item.fromString,
+                      toStatus: item.toString,
+                    },
+                  })
+                }
               }
             }
           }
         }
-      }
 
-      // Check comments made by the user on the target date
-      if (issue.fields.comment?.comments) {
-        for (const comment of issue.fields.comment.comments) {
-          const commentDate = new Date(comment.created).toISOString().split('T')[0]
-          if (commentDate === date && comment.author?.accountId === accountId) {
-            hasUserActivity = true
-            const commentText = extractTextFromADF(comment.body)
-            activities.push({
-              id: `comment-${issue.id}-${comment.id}`,
-              type: 'comment',
-              issueKey: issue.key,
-              issueSummary: issue.fields.summary,
-              project: issue.fields.project.key,
-              date: comment.created,
-              url: `${baseUrl}/browse/${issue.key}?focusedCommentId=${comment.id}`,
-              author: comment.author?.displayName,
-              details: {
-                commentBody: commentText.length > 200 ? commentText.substring(0, 200) + '...' : commentText,
-              },
-            })
+        // Check comments made by the user on the target date
+        if (issue.fields.comment?.comments) {
+          for (const comment of issue.fields.comment.comments) {
+            const commentDate = new Date(comment.created).toISOString().split('T')[0]
+            if (commentDate === date && comment.author?.accountId === accountId) {
+              hasUserActivity = true
+              const commentText = extractTextFromADF(comment.body)
+              dayActivities.push({
+                id: `comment-${issue.id}-${comment.id}`,
+                type: 'comment',
+                issueKey: issue.key,
+                issueSummary: issue.fields.summary,
+                project: issue.fields.project.key,
+                date: comment.created,
+                url: `${baseUrl}/browse/${issue.key}?focusedCommentId=${comment.id}`,
+                author: comment.author?.displayName,
+                details: {
+                  commentBody: commentText.length > 200 ? commentText.substring(0, 200) + '...' : commentText,
+                },
+              })
+            }
           }
+        }
+
+        // Check worklogs added by the user on the target date
+        if (issue.fields.worklog?.worklogs) {
+          for (const worklog of issue.fields.worklog.worklogs) {
+            const worklogDate = new Date(worklog.started).toISOString().split('T')[0]
+            if (worklogDate === date && worklog.author?.accountId === accountId) {
+              hasUserActivity = true
+              dayActivities.push({
+                id: `worklog-${issue.id}-${worklog.id}`,
+                type: 'worklog',
+                issueKey: issue.key,
+                issueSummary: issue.fields.summary,
+                project: issue.fields.project.key,
+                date: worklog.started,
+                url: `${baseUrl}/browse/${issue.key}?focusedWorklogId=${worklog.id}`,
+                author: worklog.author?.displayName,
+                details: {
+                  timeSpent: worklog.timeSpent,
+                  timeSpentSeconds: worklog.timeSpentSeconds,
+                  commentBody: worklog.comment ? extractTextFromADF(worklog.comment) : undefined,
+                },
+              })
+            }
+          }
+        }
+
+        // Add the issue itself if user had any activity on it
+        if (hasUserActivity) {
+          issuesWithUserActivity.add(issue.key)
+          dayActivities.push({
+            id: `issue-${issue.id}`,
+            type: 'issue',
+            issueKey: issue.key,
+            issueSummary: issue.fields.summary,
+            project: issue.fields.project.key,
+            date: issue.fields.updated,
+            url: `${baseUrl}/browse/${issue.key}`,
+          })
         }
       }
 
-      // Check worklogs added by the user on the target date
-      if (issue.fields.worklog?.worklogs) {
-        for (const worklog of issue.fields.worklog.worklogs) {
-          const worklogDate = new Date(worklog.started).toISOString().split('T')[0]
-          if (worklogDate === date && worklog.author?.accountId === accountId) {
-            hasUserActivity = true
-            activities.push({
-              id: `worklog-${issue.id}-${worklog.id}`,
-              type: 'worklog',
-              issueKey: issue.key,
-              issueSummary: issue.fields.summary,
-              project: issue.fields.project.key,
-              date: worklog.started,
-              url: `${baseUrl}/browse/${issue.key}?focusedWorklogId=${worklog.id}`,
-              author: worklog.author?.displayName,
-              details: {
-                timeSpent: worklog.timeSpent,
-                timeSpentSeconds: worklog.timeSpentSeconds,
-                commentBody: worklog.comment ? extractTextFromADF(worklog.comment) : undefined,
-              },
-            })
-          }
-        }
+      // Group by type for summary
+      const dayIssues = dayActivities.filter(a => a.type === 'issue')
+      const dayTransitions = dayActivities.filter(a => a.type === 'transition')
+      const dayComments = dayActivities.filter(a => a.type === 'comment')
+      const dayWorklogs = dayActivities.filter(a => a.type === 'worklog')
+
+      // Calculate total time logged for this day
+      const totalTimeSeconds = dayWorklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+      const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
+
+      const daySummary = {
+        issuesWorkedOn: issuesWithUserActivity.size,
+        transitionsMade: dayTransitions.length,
+        commentsMade: dayComments.length,
+        worklogsAdded: dayWorklogs.length,
+        totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
       }
 
-      // Add the issue itself if user had any activity on it
-      if (hasUserActivity) {
-        issuesWithUserActivity.add(issue.key)
-        activities.push({
-          id: `issue-${issue.id}`,
-          type: 'issue',
-          issueKey: issue.key,
-          issueSummary: issue.fields.summary,
-          project: issue.fields.project.key,
-          date: issue.fields.updated,
-          url: `${baseUrl}/browse/${issue.key}`,
-        })
+      // Save to local date-based cache
+      const syncedAt = new Date().toISOString()
+      const dailyData: JiraDailyData = {
+        date,
+        syncedAt,
+        activities: dayActivities,
+        summary: daySummary,
       }
+      await saveJiraDailyData(dailyData)
+      latestSyncedAt = syncedAt
+
+      // Accumulate all activities
+      allActivities = allActivities.concat(dayActivities)
+
+      console.log('[JIRA Sync] Synced', dayActivities.length, 'activities for', date)
     }
 
-    // Group by type for summary
-    const issues = activities.filter(a => a.type === 'issue')
-    const transitions = activities.filter(a => a.type === 'transition')
-    const comments = activities.filter(a => a.type === 'comment')
-    const worklogs = activities.filter(a => a.type === 'worklog')
+    // Also update the legacy cache for backwards compatibility
+    await addJiraActivities(allActivities)
 
-    // Calculate total time logged
+    // Return aggregated results
+    const issues = allActivities.filter(a => a.type === 'issue')
+    const transitions = allActivities.filter(a => a.type === 'transition')
+    const comments = allActivities.filter(a => a.type === 'comment')
+    const worklogs = allActivities.filter(a => a.type === 'worklog')
+
+    // Calculate totals
+    const uniqueIssues = new Set(allActivities.map(a => a.issueKey))
     const totalTimeSeconds = worklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
     const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
 
-    const summary = {
-      issuesWorkedOn: issuesWithUserActivity.size,
-      transitionsMade: transitions.length,
-      commentsMade: comments.length,
-      worklogsAdded: worklogs.length,
-      totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
-    }
-
-    // Save to local date-based cache
-    const dailyData: JiraDailyData = {
-      date,
-      syncedAt: new Date().toISOString(),
-      activities,
-      summary,
-    }
-    await saveJiraDailyData(dailyData)
-
-    // Also update the legacy cache for backwards compatibility
-    await addJiraActivities(activities)
-
-    console.log('[JIRA Sync] Synced', activities.length, 'activities for', date)
-
     return c.json({
-      date,
+      from: fromDate,
+      to: toDate,
       synced: true,
-      syncedAt: dailyData.syncedAt,
+      syncedAt: latestSyncedAt,
       issues,
       transitions,
       comments,
       worklogs,
-      summary,
+      summary: {
+        issuesWorkedOn: uniqueIssues.size,
+        transitionsMade: transitions.length,
+        commentsMade: comments.length,
+        worklogsAdded: worklogs.length,
+        totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
+      },
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to sync activity'
@@ -747,56 +829,119 @@ api.get('/jira/cache', async (c) => {
 // ============== Summary Routes ==============
 
 api.get('/summary/daily', async (c) => {
-  const date = c.req.query('date') || new Date().toISOString().split('T')[0]
+  const fromDate = c.req.query('from') || c.req.query('date') || new Date().toISOString().split('T')[0]
+  const toDate = c.req.query('to') || fromDate
   
-  // Check if we have a cached summary
-  const cached = await getDailySummary(date)
-  if (cached) {
-    return c.json(cached)
+  // For single date, check cached summary
+  if (fromDate === toDate) {
+    const cached = await getDailySummary(fromDate)
+    if (cached) {
+      return c.json(cached)
+    }
   }
 
-  // Otherwise return empty structure with all sources
+  // Generate all dates in range
+  const dates: string[] = []
+  const current = new Date(fromDate)
+  const end = new Date(toDate)
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0])
+    current.setDate(current.getDate() + 1)
+  }
+
+  // Aggregate GitHub data
+  const githubCache = await getGitHubCache()
+  const rangeStart = new Date(fromDate)
+  rangeStart.setHours(0, 0, 0, 0)
+  const rangeEnd = new Date(toDate)
+  rangeEnd.setHours(23, 59, 59, 999)
+  
+  const githubActivities = githubCache.activities.filter(a => {
+    const actDate = new Date(a.date)
+    return actDate >= rangeStart && actDate <= rangeEnd
+  })
+
+  // Aggregate JIRA data from all dates
+  let allJiraActivities: JiraActivity[] = []
+  for (const date of dates) {
+    const jiraData = await getJiraDailyData(date)
+    if (jiraData?.activities) {
+      allJiraActivities = allJiraActivities.concat(jiraData.activities)
+    }
+  }
+
+  // Aggregate Notes data
+  const allNotes = await getNotes()
+  const rangeNotes = allNotes.filter(n => {
+    const noteDate = new Date(n.updatedAt).toISOString().split('T')[0]
+    return noteDate >= fromDate && noteDate <= toDate
+  })
+
+  // Calculate stats
+  const commits = githubActivities.filter(a => a.type === 'commit')
+  const prs = githubActivities.filter(a => a.type === 'pr')
+  const reviews = githubActivities.filter(a => a.type === 'review')
+  const jiraIssues = allJiraActivities.filter(a => a.type === 'issue')
+  const jiraTransitions = allJiraActivities.filter(a => a.type === 'transition')
+  const jiraComments = allJiraActivities.filter(a => a.type === 'comment')
+  const jiraWorklogs = allJiraActivities.filter(a => a.type === 'worklog')
+  const totalTimeSeconds = jiraWorklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+  const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
+
   return c.json({
-    date,
+    from: fromDate,
+    to: toDate,
+    date: fromDate, // backwards compatibility
     generatedAt: null,
     github: {
-      commits: 0,
-      pullRequests: 0,
-      reviews: 0,
-      activities: []
+      commits: commits.length,
+      pullRequests: prs.length,
+      reviews: reviews.length,
+      activities: githubActivities
     },
     jira: {
-      issuesWorkedOn: 0,
-      transitions: 0,
-      comments: 0,
-      worklogs: 0,
-      timeLogged: null,
-      activities: []
+      issuesWorkedOn: jiraIssues.length,
+      transitions: jiraTransitions.length,
+      comments: jiraComments.length,
+      worklogs: jiraWorklogs.length,
+      timeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
+      activities: allJiraActivities
     },
     notes: {
-      count: 0,
-      items: []
+      count: rangeNotes.length,
+      items: rangeNotes
     },
     aiReport: null
   })
 })
 
 api.post('/summary/generate', async (c) => {
-  const { date } = await c.req.json()
-  const targetDate = date || new Date().toISOString().split('T')[0]
+  const body = await c.req.json()
+  const fromDate = body.from || body.date || new Date().toISOString().split('T')[0]
+  const toDate = body.to || fromDate
   
   const config = await getConfig()
+
+  // Generate all dates in range
+  const dates: string[] = []
+  const current = new Date(fromDate)
+  const end = new Date(toDate)
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0])
+    current.setDate(current.getDate() + 1)
+  }
+  const isRange = dates.length > 1
   
   // === Aggregate GitHub Data ===
   const githubCache = await getGitHubCache()
-  const dayStart = new Date(targetDate)
-  dayStart.setHours(0, 0, 0, 0)
-  const dayEnd = new Date(targetDate)
-  dayEnd.setHours(23, 59, 59, 999)
+  const rangeStart = new Date(fromDate)
+  rangeStart.setHours(0, 0, 0, 0)
+  const rangeEnd = new Date(toDate)
+  rangeEnd.setHours(23, 59, 59, 999)
   
   const githubActivities = githubCache.activities.filter(a => {
     const actDate = new Date(a.date)
-    return actDate >= dayStart && actDate <= dayEnd
+    return actDate >= rangeStart && actDate <= rangeEnd
   })
 
   const commits = githubActivities.filter(a => a.type === 'commit')
@@ -804,20 +949,25 @@ api.post('/summary/generate', async (c) => {
   const reviews = githubActivities.filter(a => a.type === 'review')
 
   // === Aggregate JIRA Data ===
-  const jiraData = await getJiraDailyData(targetDate)
-  const jiraActivities = jiraData?.activities || []
-  const jiraIssues = jiraActivities.filter(a => a.type === 'issue')
-  const jiraTransitions = jiraActivities.filter(a => a.type === 'transition')
-  const jiraComments = jiraActivities.filter(a => a.type === 'comment')
-  const jiraWorklogs = jiraActivities.filter(a => a.type === 'worklog')
+  let allJiraActivities: JiraActivity[] = []
+  for (const date of dates) {
+    const jiraData = await getJiraDailyData(date)
+    if (jiraData?.activities) {
+      allJiraActivities = allJiraActivities.concat(jiraData.activities)
+    }
+  }
+  const jiraIssues = allJiraActivities.filter(a => a.type === 'issue')
+  const jiraTransitions = allJiraActivities.filter(a => a.type === 'transition')
+  const jiraComments = allJiraActivities.filter(a => a.type === 'comment')
+  const jiraWorklogs = allJiraActivities.filter(a => a.type === 'worklog')
   const totalTimeSeconds = jiraWorklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
   const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
 
   // === Aggregate Notes Data ===
   const allNotes = await getNotes()
-  const dayNotes = allNotes.filter(n => {
+  const rangeNotes = allNotes.filter(n => {
     const noteDate = new Date(n.updatedAt).toISOString().split('T')[0]
-    return noteDate === targetDate
+    return noteDate >= fromDate && noteDate <= toDate
   })
 
   // === Generate AI Report ===
@@ -825,27 +975,30 @@ api.post('/summary/generate', async (c) => {
   
   const totalActivity = commits.length + prs.length + reviews.length + 
     jiraIssues.length + jiraTransitions.length + jiraComments.length + jiraWorklogs.length +
-    dayNotes.length
+    rangeNotes.length
 
   if (config.openrouter.apiKey && totalActivity > 0) {
     try {
-      const prompt = `Write a brief daily work summary for a software developer.
+      const dateLabel = isRange ? `${fromDate} to ${toDate} (${dates.length} days)` : fromDate
+      const summaryType = isRange ? 'period' : 'daily'
+      
+      const prompt = `Write a brief ${summaryType} work summary for a software developer.
 
-Date: ${targetDate}
+${isRange ? `Period: ${dateLabel}` : `Date: ${fromDate}`}
 
 GitHub: ${commits.length} commits, ${prs.length} PRs, ${reviews.length} reviews
 ${commits.slice(0, 5).map(c => `- ${c.title}`).join('\n') || ''}
 
 JIRA: ${jiraIssues.length} issues, ${jiraTransitions.length} status changes, ${totalTimeHours > 0 ? `${totalTimeHours}h logged` : 'no time logged'}
-${jiraIssues.slice(0, 3).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || ''}
+${jiraIssues.slice(0, 5).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || ''}
 
-Notes: ${dayNotes.length} updated
+Notes: ${rangeNotes.length} updated
 
 ---
 
-Write a concise summary (max 150 words) with:
-1. One sentence overview of the day
-2. 3-4 bullet points of key accomplishments
+Write a concise summary (max ${isRange ? '200' : '150'} words) with:
+1. One sentence overview of ${isRange ? 'this period' : 'the day'}
+2. ${isRange ? '4-6' : '3-4'} bullet points of key accomplishments
 
 Keep it brief and suitable for a standup. No headers, just plain text.`
 
@@ -858,7 +1011,7 @@ Keep it brief and suitable for a standup. No headers, just plain text.`
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 250,
+          max_tokens: isRange ? 350 : 250,
         })
       })
 
@@ -872,7 +1025,9 @@ Keep it brief and suitable for a standup. No headers, just plain text.`
   }
 
   const summary = {
-    date: targetDate,
+    from: fromDate,
+    to: toDate,
+    date: fromDate, // backwards compatibility
     generatedAt: new Date().toISOString(),
     github: {
       commits: commits.length,
@@ -886,11 +1041,11 @@ Keep it brief and suitable for a standup. No headers, just plain text.`
       comments: jiraComments.length,
       worklogs: jiraWorklogs.length,
       timeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
-      activities: jiraActivities
+      activities: allJiraActivities
     },
     notes: {
-      count: dayNotes.length,
-      items: dayNotes
+      count: rangeNotes.length,
+      items: rangeNotes
     },
     aiReport,
     // Legacy fields for backwards compatibility
@@ -901,8 +1056,10 @@ Keep it brief and suitable for a standup. No headers, just plain text.`
     activities: githubActivities
   }
 
-  // Save the summary
-  await saveDailySummary(summary)
+  // Save the summary (for single date only)
+  if (!isRange) {
+    await saveDailySummary(summary)
+  }
 
   return c.json(summary)
 })

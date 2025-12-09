@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { format } from 'date-fns'
+import { format, addDays, differenceInDays } from 'date-fns'
+import { DateRange } from 'react-day-picker'
 import { 
   Ticket, 
   ArrowRightLeft,
@@ -55,7 +56,10 @@ interface ActivityResponse {
 }
 
 export function JIRA() {
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({
+    from: new Date(),
+    to: new Date()
+  })
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -82,28 +86,57 @@ export function JIRA() {
     return `${year}-${month}-${day}`
   }
 
-  // Format date for display
-  const formatDateForDisplay = (date: Date): string => {
+  // Format date range for display
+  const formatDateRangeForDisplay = (range: DateRange | undefined): string => {
+    if (!range?.from) return 'Select dates'
+    
     const today = new Date()
     const yesterday = new Date(today)
     yesterday.setDate(yesterday.getDate() - 1)
     
-    if (date.toDateString() === today.toDateString()) {
-      return 'Today'
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      return 'Yesterday'
+    const formatSingleDate = (date: Date): string => {
+      if (date.toDateString() === today.toDateString()) {
+        return 'Today'
+      } else if (date.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday'
+      }
+      return format(date, 'MMM d')
     }
-    return format(date, 'MMM d, yyyy')
+    
+    if (!range.to || range.from.toDateString() === range.to.toDateString()) {
+      // Single date
+      if (range.from.toDateString() === today.toDateString()) {
+        return 'Today'
+      } else if (range.from.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday'
+      }
+      return format(range.from, 'MMM d, yyyy')
+    }
+    
+    // Date range
+    return `${formatSingleDate(range.from)} - ${formatSingleDate(range.to)}`
+  }
+
+  // Get number of days in range
+  const getDaysInRange = (): number => {
+    if (!dateRange?.from) return 0
+    if (!dateRange.to || dateRange.from.toDateString() === dateRange.to.toDateString()) {
+      return 1
+    }
+    return differenceInDays(dateRange.to, dateRange.from) + 1
   }
 
   // Fetch JIRA activity from local cache (does NOT call JIRA API)
   const fetchActivity = useCallback(async () => {
+    if (!dateRange?.from) return
+    
     try {
       setError(null)
-      const dateStr = formatDateForApi(selectedDate)
+      const fromDate = formatDateForApi(dateRange.from)
+      const toDate = dateRange.to ? formatDateForApi(dateRange.to) : fromDate
       
       const response = await fetch(
-        `http://localhost:3001/api/jira/activity?date=${dateStr}`
+        `http://localhost:3001/api/jira/activity?from=${fromDate}&to=${toDate}`
       )
       
       if (!response.ok) {
@@ -161,21 +194,24 @@ export function JIRA() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch activity')
     }
-  }, [selectedDate])
+  }, [dateRange])
 
   // Sync JIRA activity from JIRA API and save to local cache
   const syncActivity = useCallback(async () => {
+    if (!dateRange?.from) return
+    
     try {
       setError(null)
       setIsSyncing(true)
-      const dateStr = formatDateForApi(selectedDate)
+      const fromDate = formatDateForApi(dateRange.from)
+      const toDate = dateRange.to ? formatDateForApi(dateRange.to) : fromDate
       
       const response = await fetch(
         'http://localhost:3001/api/jira/sync',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date: dateStr })
+          body: JSON.stringify({ from: fromDate, to: toDate })
         }
       )
       
@@ -224,7 +260,7 @@ export function JIRA() {
     } finally {
       setIsSyncing(false)
     }
-  }, [selectedDate])
+  }, [dateRange])
 
   // Check connection status and fetch initial data from cache
   useEffect(() => {
@@ -254,15 +290,16 @@ export function JIRA() {
     if (isConnected && !isLoading) {
       fetchActivity()
     }
-  }, [selectedDate, isConnected, fetchActivity])
+  }, [dateRange, isConnected, fetchActivity])
 
   const handleSync = async () => {
     await syncActivity()
   }
 
-  const handleDateSelect = (date: Date | undefined) => {
-    if (date) {
-      setSelectedDate(date)
+  const handleDateSelect = (range: DateRange | undefined) => {
+    setDateRange(range)
+    // Close popover when both dates are selected
+    if (range?.from && range?.to) {
       setIsCalendarOpen(false)
     }
   }
@@ -393,26 +430,68 @@ export function JIRA() {
             {isSyncing ? 'Syncing...' : 'Sync'}
           </button>
 
-          {/* Date Picker */}
+          {/* Date Range Picker */}
           <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
             <PopoverTrigger asChild>
               <button
                 className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50"
               >
                 <CalendarIcon size={16} className="text-muted-foreground" />
-                {formatDateForDisplay(selectedDate)}
+                {formatDateRangeForDisplay(dateRange)}
+                {getDaysInRange() > 1 && (
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                    {getDaysInRange()} days
+                  </span>
+                )}
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="end">
               <Calendar
                 key={isCalendarOpen ? 'open' : 'closed'}
-                mode="single"
-                selected={selectedDate}
+                mode="range"
+                selected={dateRange}
                 onSelect={handleDateSelect}
-                defaultMonth={selectedDate}
+                defaultMonth={dateRange?.from}
                 disabled={(date) => date > new Date()}
+                numberOfMonths={2}
                 initialFocus
               />
+              <div className="border-t border-border p-3 flex items-center justify-between">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      const today = new Date()
+                      setDateRange({ from: today, to: today })
+                      setIsCalendarOpen(false)
+                    }}
+                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
+                  >
+                    Today
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date()
+                      const weekAgo = addDays(today, -6)
+                      setDateRange({ from: weekAgo, to: today })
+                      setIsCalendarOpen(false)
+                    }}
+                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
+                  >
+                    Last 7 days
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date()
+                      const monthAgo = addDays(today, -29)
+                      setDateRange({ from: monthAgo, to: today })
+                      setIsCalendarOpen(false)
+                    }}
+                    className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
+                  >
+                    Last 30 days
+                  </button>
+                </div>
+              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -483,7 +562,7 @@ export function JIRA() {
       <div className="rounded-2xl border border-border bg-card">
         <div className="border-b border-border p-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-foreground">Activity for {formatDateForDisplay(selectedDate)}</h2>
+            <h2 className="font-semibold text-foreground">Activity for {formatDateRangeForDisplay(dateRange)}</h2>
             {syncedAt && (
               <span className="text-xs text-muted-foreground">
                 Synced {formatDistanceToNow(syncedAt)}
@@ -496,10 +575,10 @@ export function JIRA() {
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <RefreshCw size={32} className="mb-4 text-muted-foreground" />
             <p className="text-sm font-medium text-foreground mb-1">
-              No data synced for {formatDateForDisplay(selectedDate).toLowerCase()}
+              No data synced for {formatDateRangeForDisplay(dateRange).toLowerCase()}
             </p>
             <p className="text-xs text-muted-foreground mb-4">
-              Click the button below to fetch your JIRA activity for this date.
+              Click the button below to fetch your JIRA activity for {getDaysInRange() > 1 ? 'these dates' : 'this date'}.
             </p>
             <button
               onClick={handleSync}
@@ -507,17 +586,17 @@ export function JIRA() {
               className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
-              {isSyncing ? 'Syncing...' : 'Sync Now'}
+              {isSyncing ? 'Syncing...' : `Sync ${getDaysInRange() > 1 ? `${getDaysInRange()} Days` : 'Now'}`}
             </button>
           </div>
         ) : activities.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <Ticket size={32} className="mb-4 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No activity found for {formatDateForDisplay(selectedDate).toLowerCase()}.
+              No activity found for {formatDateRangeForDisplay(dateRange).toLowerCase()}.
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              You didn't make any changes to JIRA tickets on this date.
+              You didn't make any changes to JIRA tickets {getDaysInRange() > 1 ? 'during this period' : 'on this date'}.
             </p>
           </div>
         ) : (
