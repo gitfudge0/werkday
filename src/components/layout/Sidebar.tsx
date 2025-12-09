@@ -13,7 +13,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  BarChart3,
   LogOut,
 } from 'lucide-react'
 
@@ -23,11 +22,10 @@ interface NavItem {
   href: string
 }
 
-// Overview section: Dashboard, Summaries, Reports
+// Overview section: Dashboard, Reports
 const overviewNav: NavItem[] = [
   { icon: <LayoutDashboard size={20} />, label: 'Dashboard', href: '/' },
-  { icon: <FileText size={20} />, label: 'Summaries', href: '/summaries' },
-  { icon: <BarChart3 size={20} />, label: 'Reports', href: '/reports' },
+  { icon: <FileText size={20} />, label: 'Reports', href: '/reports' },
 ]
 
 // Sources section: GitHub, JIRA, Notes

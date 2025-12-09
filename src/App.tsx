@@ -1,44 +1,54 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { Command } from '@tauri-apps/plugin-shell'
 import { Sidebar } from '@/components/layout/Sidebar'
-import { Dashboard, GitHub, JIRA, Notes, Settings, Summaries, Reports } from '@/pages'
+import { Dashboard, GitHub, JIRA, Notes, Settings, Summaries } from '@/pages'
 
 function App() {
   const [serverStatus, setServerStatus] = useState<'starting' | 'running' | 'error'>('starting')
 
   useEffect(() => {
-    let sidecarProcess: Awaited<ReturnType<typeof Command.prototype.spawn>> | null = null
+    const checkServer = async () => {
+      // Helper to check if server is healthy
+      const isServerHealthy = async (): Promise<boolean> => {
+        try {
+          const response = await fetch('http://localhost:3001/health')
+          return response.ok
+        } catch {
+          return false
+        }
+      }
 
-    const startServer = async () => {
-      try {
-        // Start the sidecar server
-        const command = Command.sidecar('binaries/werkday-server')
-        sidecarProcess = await command.spawn()
-        
-        console.log('Sidecar started with PID:', sidecarProcess.pid)
-        
-        // Give it a moment to start
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        
-        // Check health
-        const response = await fetch('http://localhost:3001/health')
-        await response.json()
+      // Check if server is already running
+      if (await isServerHealthy()) {
         setServerStatus('running')
-      } catch (error) {
-        console.error('Failed to start server:', error)
-        setServerStatus('error')
+        return
       }
+
+      // Try to start sidecar if in Tauri environment
+      if (window.__TAURI__) {
+        try {
+          const { Command } = await import('@tauri-apps/plugin-shell')
+          const command = Command.sidecar('binaries/werkday-server')
+          await command.spawn()
+          await new Promise(resolve => setTimeout(resolve, 1500))
+        } catch (error) {
+          console.error('Failed to start sidecar:', error)
+        }
+      }
+
+      // Retry checking server health (works for both dev and Tauri)
+      for (let i = 0; i < 10; i++) {
+        if (await isServerHealthy()) {
+          setServerStatus('running')
+          return
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+
+      setServerStatus('error')
     }
 
-    startServer()
-
-    return () => {
-      // Cleanup: kill the sidecar when component unmounts
-      if (sidecarProcess) {
-        sidecarProcess.kill()
-      }
-    }
+    checkServer()
   }, [])
 
   return (
@@ -54,8 +64,7 @@ function App() {
             <Route path="/github" element={<GitHub />} />
             <Route path="/jira" element={<JIRA />} />
             <Route path="/notes" element={<Notes />} />
-            <Route path="/summaries" element={<Summaries />} />
-            <Route path="/reports" element={<Reports />} />
+            <Route path="/reports" element={<Summaries />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
