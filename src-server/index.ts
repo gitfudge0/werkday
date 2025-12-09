@@ -755,15 +755,29 @@ api.get('/summary/daily', async (c) => {
     return c.json(cached)
   }
 
-  // Otherwise return empty structure
+  // Otherwise return empty structure with all sources
   return c.json({
     date,
     generatedAt: null,
-    commits: 0,
-    pullRequests: 0,
-    reviews: 0,
-    aiSummary: null,
-    activities: []
+    github: {
+      commits: 0,
+      pullRequests: 0,
+      reviews: 0,
+      activities: []
+    },
+    jira: {
+      issuesWorkedOn: 0,
+      transitions: 0,
+      comments: 0,
+      worklogs: 0,
+      timeLogged: null,
+      activities: []
+    },
+    notes: {
+      count: 0,
+      items: []
+    },
+    aiReport: null
   })
 })
 
@@ -773,39 +787,89 @@ api.post('/summary/generate', async (c) => {
   
   const config = await getConfig()
   
-  // Fetch GitHub activity for the date
-  const cache = await getGitHubCache()
+  // === Aggregate GitHub Data ===
+  const githubCache = await getGitHubCache()
   const dayStart = new Date(targetDate)
   dayStart.setHours(0, 0, 0, 0)
   const dayEnd = new Date(targetDate)
   dayEnd.setHours(23, 59, 59, 999)
   
-  const dayActivities = cache.activities.filter(a => {
+  const githubActivities = githubCache.activities.filter(a => {
     const actDate = new Date(a.date)
     return actDate >= dayStart && actDate <= dayEnd
   })
 
-  const commits = dayActivities.filter(a => a.type === 'commit')
-  const prs = dayActivities.filter(a => a.type === 'pr')
-  const reviews = dayActivities.filter(a => a.type === 'review')
+  const commits = githubActivities.filter(a => a.type === 'commit')
+  const prs = githubActivities.filter(a => a.type === 'pr')
+  const reviews = githubActivities.filter(a => a.type === 'review')
 
-  // Generate AI summary if OpenRouter is configured
-  let aiSummary: string | null = null
+  // === Aggregate JIRA Data ===
+  const jiraData = await getJiraDailyData(targetDate)
+  const jiraActivities = jiraData?.activities || []
+  const jiraIssues = jiraActivities.filter(a => a.type === 'issue')
+  const jiraTransitions = jiraActivities.filter(a => a.type === 'transition')
+  const jiraComments = jiraActivities.filter(a => a.type === 'comment')
+  const jiraWorklogs = jiraActivities.filter(a => a.type === 'worklog')
+  const totalTimeSeconds = jiraWorklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+  const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
+
+  // === Aggregate Notes Data ===
+  const allNotes = await getNotes()
+  const dayNotes = allNotes.filter(n => {
+    const noteDate = new Date(n.updatedAt).toISOString().split('T')[0]
+    return noteDate === targetDate
+  })
+
+  // === Generate AI Report ===
+  let aiReport: string | null = null
   
-  if (config.openrouter.apiKey && dayActivities.length > 0) {
+  const totalActivity = commits.length + prs.length + reviews.length + 
+    jiraIssues.length + jiraTransitions.length + jiraComments.length + jiraWorklogs.length +
+    dayNotes.length
+
+  if (config.openrouter.apiKey && totalActivity > 0) {
     try {
-      const prompt = `Summarize this developer's workday in 2-3 sentences:
-      
+      const prompt = `Generate a professional daily work report for a software developer.
+
+Date: ${targetDate}
+
+## GitHub Activity
 Commits (${commits.length}):
-${commits.map(c => `- ${c.title} (${c.repo})`).join('\n') || 'None'}
+${commits.slice(0, 10).map(c => `- ${c.title} (${c.repo})`).join('\n') || 'None'}
 
 Pull Requests (${prs.length}):
-${prs.map(p => `- ${p.title} (${p.repo}) - ${p.status}`).join('\n') || 'None'}
+${prs.slice(0, 5).map(p => `- ${p.title} (${p.repo}) - ${p.status}`).join('\n') || 'None'}
 
 Code Reviews (${reviews.length}):
-${reviews.map(r => `- ${r.title} (${r.repo})`).join('\n') || 'None'}
+${reviews.slice(0, 5).map(r => `- ${r.title} (${r.repo})`).join('\n') || 'None'}
 
-Be concise and focus on the impact of the work done.`
+## JIRA Activity
+Issues Worked On (${jiraIssues.length}):
+${jiraIssues.slice(0, 5).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || 'None'}
+
+Status Transitions (${jiraTransitions.length}):
+${jiraTransitions.slice(0, 5).map(t => `- ${t.issueKey}: ${t.details?.fromStatus} → ${t.details?.toStatus}`).join('\n') || 'None'}
+
+Comments Added: ${jiraComments.length}
+Time Logged: ${totalTimeHours > 0 ? `${totalTimeHours} hours` : 'None'}
+
+## Notes
+Notes Created/Updated (${dayNotes.length}):
+${dayNotes.slice(0, 3).map(n => `- ${n.title}`).join('\n') || 'None'}
+
+---
+
+Generate a structured daily work report with:
+
+1. **Executive Summary** (2-3 sentences max) - High-level overview of what was accomplished
+
+2. **Key Metrics** - A brief line summarizing the numbers (X commits, Y issues, Z hours logged, etc.)
+
+3. **Highlights** - 3-5 bullet points of the most significant work items
+
+Keep the tone professional, concise, and suitable for sharing with management or using in standups.
+Focus on impact and accomplishments rather than just listing activities.
+Do not use markdown headers in your response, just plain text with bullet points where appropriate.`
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -816,27 +880,47 @@ Be concise and focus on the impact of the work done.`
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 200,
+          max_tokens: 500,
         })
       })
 
       if (response.ok) {
         const data = await response.json()
-        aiSummary = data.choices?.[0]?.message?.content || null
+        aiReport = data.choices?.[0]?.message?.content || null
       }
     } catch (error) {
-      console.error('Failed to generate AI summary:', error)
+      console.error('Failed to generate AI report:', error)
     }
   }
 
   const summary = {
     date: targetDate,
     generatedAt: new Date().toISOString(),
+    github: {
+      commits: commits.length,
+      pullRequests: prs.length,
+      reviews: reviews.length,
+      activities: githubActivities
+    },
+    jira: {
+      issuesWorkedOn: jiraIssues.length,
+      transitions: jiraTransitions.length,
+      comments: jiraComments.length,
+      worklogs: jiraWorklogs.length,
+      timeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
+      activities: jiraActivities
+    },
+    notes: {
+      count: dayNotes.length,
+      items: dayNotes
+    },
+    aiReport,
+    // Legacy fields for backwards compatibility
     commits: commits.length,
     pullRequests: prs.length,
     reviews: reviews.length,
-    aiSummary,
-    activities: dayActivities
+    aiSummary: aiReport,
+    activities: githubActivities
   }
 
   // Save the summary

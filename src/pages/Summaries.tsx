@@ -1,21 +1,28 @@
 import { useState, useEffect } from 'react'
+import { format } from 'date-fns'
 import { 
   FileText, 
   Sparkles, 
-  Calendar,
   GitCommit,
   GitPullRequest,
   MessageSquare,
   Loader2,
   RefreshCw,
-  ChevronLeft,
-  ChevronRight,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Ticket,
+  ArrowRightLeft,
+  Timer,
+  StickyNote,
+  CalendarIcon,
+  Clock,
+  TrendingUp
 } from 'lucide-react'
 import { cn, formatDistanceToNow } from '@/lib/utils'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-interface Activity {
+interface GitHubActivity {
   id: string
   type: 'commit' | 'pr' | 'review'
   title: string
@@ -25,25 +32,83 @@ interface Activity {
   status?: 'open' | 'closed' | 'merged'
 }
 
+interface JiraActivity {
+  id: string
+  type: 'issue' | 'transition' | 'comment' | 'worklog'
+  issueKey: string
+  issueSummary: string
+  project: string
+  date: string
+  url: string
+  details?: {
+    fromStatus?: string
+    toStatus?: string
+    timeSpent?: string
+    commentBody?: string
+  }
+}
+
+interface Note {
+  id: string
+  title: string
+  content: string
+  updatedAt: string
+}
+
 interface DailySummary {
   date: string
   generatedAt: string | null
-  commits: number
-  pullRequests: number
-  reviews: number
-  aiSummary: string | null
-  activities: Activity[]
+  github: {
+    commits: number
+    pullRequests: number
+    reviews: number
+    activities: GitHubActivity[]
+  }
+  jira: {
+    issuesWorkedOn: number
+    transitions: number
+    comments: number
+    worklogs: number
+    timeLogged: string | null
+    activities: JiraActivity[]
+  }
+  notes: {
+    count: number
+    items: Note[]
+  }
+  aiReport: string | null
 }
 
 export function Summaries() {
-  const [selectedDate, setSelectedDate] = useState(() => {
-    return new Date().toISOString().split('T')[0]
-  })
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasOpenRouter, setHasOpenRouter] = useState(false)
+
+  // Format date for API (YYYY-MM-DD) - using local timezone
+  const formatDateForApi = (date: Date): string => {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  // Format date for display
+  const formatDateForDisplay = (date: Date): string => {
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today'
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday'
+    }
+    return format(date, 'EEEE, MMMM d, yyyy')
+  }
 
   useEffect(() => {
     // Check if OpenRouter is configured
@@ -52,7 +117,7 @@ export function Summaries() {
         const response = await fetch('http://localhost:3001/api/config')
         if (response.ok) {
           const config = await response.json()
-          setHasOpenRouter(!!config.openrouter?.apiKey && config.openrouter.apiKey !== '***' || !!config.openrouter?.apiKey)
+          setHasOpenRouter(!!config.openrouter?.apiKey)
         }
       } catch (error) {
         console.error('Failed to check config:', error)
@@ -69,14 +134,15 @@ export function Summaries() {
     setIsLoading(true)
     setError(null)
     try {
-      const response = await fetch(`http://localhost:3001/api/summary/daily?date=${selectedDate}`)
+      const dateStr = formatDateForApi(selectedDate)
+      const response = await fetch(`http://localhost:3001/api/summary/daily?date=${dateStr}`)
       if (response.ok) {
         const data = await response.json()
         setSummary(data)
       } else {
         setError('Failed to fetch summary')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to connect to server')
     } finally {
       setIsLoading(false)
@@ -87,14 +153,11 @@ export function Summaries() {
     setIsGenerating(true)
     setError(null)
     try {
-      // First, make sure we have fresh activity data
-      await fetch(`http://localhost:3001/api/github/activity?since=${selectedDate}T00:00:00Z&cache=false`)
-      
-      // Then generate the summary
+      const dateStr = formatDateForApi(selectedDate)
       const response = await fetch('http://localhost:3001/api/summary/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: selectedDate })
+        body: JSON.stringify({ date: dateStr })
       })
       
       if (response.ok) {
@@ -103,96 +166,116 @@ export function Summaries() {
       } else {
         setError('Failed to generate summary')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to connect to server')
     } finally {
       setIsGenerating(false)
     }
   }
 
-  const changeDate = (days: number) => {
-    const date = new Date(selectedDate)
-    date.setDate(date.getDate() + days)
-    // Don't go into the future
-    if (date <= new Date()) {
-      setSelectedDate(date.toISOString().split('T')[0])
+  const handleDateSelect = (date: Date | undefined) => {
+    if (date) {
+      setSelectedDate(date)
+      setIsCalendarOpen(false)
     }
   }
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr)
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(yesterday.getDate() - 1)
-    
-    if (dateStr === today.toISOString().split('T')[0]) {
-      return 'Today'
-    } else if (dateStr === yesterday.toISOString().split('T')[0]) {
-      return 'Yesterday'
+  // Calculate totals
+  const totalGitHub = summary ? summary.github.commits + summary.github.pullRequests + summary.github.reviews : 0
+  const totalJira = summary ? summary.jira.issuesWorkedOn + summary.jira.transitions + summary.jira.comments + summary.jira.worklogs : 0
+  const totalNotes = summary?.notes.count || 0
+  const totalActivity = totalGitHub + totalJira + totalNotes
+
+  // Combine all activities for timeline
+  const allActivities = summary ? [
+    ...summary.github.activities.map(a => ({ ...a, source: 'github' as const })),
+    ...summary.jira.activities.map(a => ({ ...a, source: 'jira' as const })),
+    ...summary.notes.items.map(n => ({ 
+      id: n.id, 
+      title: n.title, 
+      date: n.updatedAt, 
+      source: 'notes' as const,
+      type: 'note' as const
+    }))
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()) : []
+
+  const getActivityIcon = (activity: typeof allActivities[0]) => {
+    if (activity.source === 'github') {
+      const ghActivity = activity as GitHubActivity & { source: 'github' }
+      switch (ghActivity.type) {
+        case 'commit': return <GitCommit size={14} className="text-emerald-400" />
+        case 'pr': return <GitPullRequest size={14} className="text-violet-400" />
+        case 'review': return <MessageSquare size={14} className="text-amber-400" />
+      }
+    } else if (activity.source === 'jira') {
+      const jiraActivity = activity as JiraActivity & { source: 'jira' }
+      switch (jiraActivity.type) {
+        case 'issue': return <Ticket size={14} className="text-blue-400" />
+        case 'transition': return <ArrowRightLeft size={14} className="text-violet-400" />
+        case 'comment': return <MessageSquare size={14} className="text-amber-400" />
+        case 'worklog': return <Timer size={14} className="text-emerald-400" />
+      }
+    } else {
+      return <StickyNote size={14} className="text-amber-400" />
     }
-    
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'long',
-      month: 'long', 
-      day: 'numeric',
-      year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
-    })
   }
 
-  const getActivityIcon = (type: string) => {
-    switch (type) {
-      case 'commit': return <GitCommit size={14} className="text-emerald-400" />
-      case 'pr': return <GitPullRequest size={14} className="text-violet-400" />
-      case 'review': return <MessageSquare size={14} className="text-amber-400" />
-      default: return null
+  const getSourceBadge = (source: 'github' | 'jira' | 'notes') => {
+    switch (source) {
+      case 'github':
+        return <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400">GitHub</span>
+      case 'jira':
+        return <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs text-blue-400">JIRA</span>
+      case 'notes':
+        return <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400">Notes</span>
     }
   }
-
-  const totalActivity = summary ? summary.commits + summary.pullRequests + summary.reviews : 0
-  const isToday = selectedDate === new Date().toISOString().split('T')[0]
 
   return (
     <main className="flex-1 overflow-y-auto p-6 custom-scrollbar">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Daily Summaries</h1>
-          <p className="text-muted-foreground">AI-powered summaries of your work activity</p>
-        </div>
-      </div>
-
-      {/* Date Navigation */}
-      <div className="mb-6 flex items-center gap-4">
-        <button
-          onClick={() => changeDate(-1)}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
-        >
-          <ChevronLeft size={20} />
-        </button>
-        
-        <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2">
-          <Calendar size={18} className="text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium text-foreground">{formatDate(selectedDate)}</p>
-            <p className="text-xs text-muted-foreground">{selectedDate}</p>
-          </div>
+          <h1 className="text-2xl font-bold text-foreground">Daily Report</h1>
+          <p className="text-muted-foreground">AI-powered summary of your work activity</p>
         </div>
         
-        <button
-          onClick={() => changeDate(1)}
-          disabled={isToday}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-30 disabled:hover:bg-card disabled:hover:text-muted-foreground"
-        >
-          <ChevronRight size={20} />
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Generate Button */}
+          <button
+            onClick={generateSummary}
+            disabled={isGenerating}
+            className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isGenerating ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Sparkles size={16} />
+            )}
+            {isGenerating ? 'Generating...' : summary?.generatedAt ? 'Regenerate' : 'Generate Report'}
+          </button>
 
-        <input
-          type="date"
-          value={selectedDate}
-          max={new Date().toISOString().split('T')[0]}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-        />
+          {/* Date Picker */}
+          <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+            <PopoverTrigger asChild>
+              <button className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <CalendarIcon size={16} className="text-muted-foreground" />
+                {formatDateForDisplay(selectedDate)}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                key={isCalendarOpen ? 'open' : 'closed'}
+                mode="single"
+                selected={selectedDate}
+                onSelect={handleDateSelect}
+                defaultMonth={selectedDate}
+                disabled={(date) => date > new Date()}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       {/* Error State */}
@@ -209,187 +292,229 @@ export function Summaries() {
           <Loader2 size={24} className="animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Main Summary Card */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* AI Summary */}
-            <div className="rounded-2xl border border-border bg-card p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10">
-                    <Sparkles size={20} className="text-violet-400" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">AI Summary</h3>
-                    {summary?.generatedAt && (
-                      <p className="text-xs text-muted-foreground">
-                        Generated {formatDistanceToNow(summary.generatedAt)}
-                      </p>
-                    )}
-                  </div>
+        <>
+          {/* Metrics Dashboard */}
+          <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {/* Total Activity */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                  <TrendingUp size={20} className="text-primary" />
                 </div>
-                <button
-                  onClick={generateSummary}
-                  disabled={isGenerating}
-                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {isGenerating ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw size={16} />
-                      {summary?.generatedAt ? 'Regenerate' : 'Generate'}
-                    </>
-                  )}
-                </button>
+                <div>
+                  <p className="text-2xl font-bold text-foreground">{totalActivity}</p>
+                  <p className="text-xs text-muted-foreground">Total Activities</p>
+                </div>
               </div>
-
-              {summary?.aiSummary ? (
-                <div className="rounded-lg bg-surface-raised p-4">
-                  <p className="text-sm leading-relaxed text-foreground">{summary.aiSummary}</p>
-                </div>
-              ) : totalActivity === 0 ? (
-                <div className="rounded-lg border border-dashed border-border p-6 text-center">
-                  <FileText size={32} className="mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    No activity found for this day
-                  </p>
-                </div>
-              ) : !hasOpenRouter ? (
-                <div className="rounded-lg bg-amber-500/10 p-4">
-                  <p className="text-sm text-amber-400">
-                    Configure OpenRouter in Settings to generate AI summaries
-                  </p>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-dashed border-border p-6 text-center">
-                  <Sparkles size={32} className="mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground mb-3">
-                    {totalActivity} activities found. Click "Generate" to create an AI summary.
-                  </p>
-                </div>
-              )}
             </div>
 
-            {/* Activity List */}
-            {summary && summary.activities.length > 0 && (
-              <div className="rounded-2xl border border-border bg-card p-6">
-                <h3 className="mb-4 font-semibold text-foreground">Activity Details</h3>
-                <div className="space-y-2">
-                  {summary.activities.map((activity) => (
-                    <a
-                      key={activity.id}
-                      href={activity.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group flex items-start gap-3 rounded-lg p-3 transition-colors hover:bg-surface-raised"
-                    >
-                      <div className="mt-0.5">
-                        {getActivityIcon(activity.type)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate group-hover:text-primary">
-                          {activity.title}
+            {/* GitHub */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+                  <GitCommit size={20} className="text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-foreground">{totalGitHub}</p>
+                  <p className="text-xs text-muted-foreground">GitHub Actions</p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{summary?.github.commits || 0} commits</span>
+                <span>{summary?.github.pullRequests || 0} PRs</span>
+                <span>{summary?.github.reviews || 0} reviews</span>
+              </div>
+            </div>
+
+            {/* JIRA */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
+                  <Ticket size={20} className="text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-foreground">{totalJira}</p>
+                  <p className="text-xs text-muted-foreground">JIRA Actions</p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{summary?.jira.issuesWorkedOn || 0} issues</span>
+                {summary?.jira.timeLogged && <span>{summary.jira.timeLogged} logged</span>}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
+                  <StickyNote size={20} className="text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-foreground">{totalNotes}</p>
+                  <p className="text-xs text-muted-foreground">Notes Updated</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-3">
+            {/* AI Report - Main Content */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="rounded-2xl border border-border bg-card">
+                <div className="flex items-center justify-between border-b border-border p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10">
+                      <Sparkles size={20} className="text-violet-400" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-foreground">AI Report</h3>
+                      {summary?.generatedAt && (
+                        <p className="text-xs text-muted-foreground">
+                          Generated {formatDistanceToNow(summary.generatedAt)}
                         </p>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{activity.repo}</span>
-                          <span>•</span>
-                          <span>{formatDistanceToNow(activity.date)}</span>
-                          {activity.status && (
-                            <>
-                              <span>•</span>
-                              <span className={cn(
-                                'capitalize',
-                                activity.status === 'merged' && 'text-violet-400',
-                                activity.status === 'open' && 'text-emerald-400',
-                                activity.status === 'closed' && 'text-muted-foreground'
-                              )}>
-                                {activity.status}
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4">
+                  {summary?.aiReport ? (
+                    <div className="prose prose-sm prose-invert max-w-none">
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                        {summary.aiReport}
+                      </p>
+                    </div>
+                  ) : totalActivity === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <FileText size={32} className="mb-4 text-muted-foreground" />
+                      <p className="text-sm font-medium text-foreground mb-1">No activity for this day</p>
+                      <p className="text-xs text-muted-foreground">
+                        Sync your GitHub and JIRA data to see activity here.
+                      </p>
+                    </div>
+                  ) : !hasOpenRouter ? (
+                    <div className="rounded-lg bg-amber-500/10 p-4">
+                      <p className="text-sm text-amber-400">
+                        Configure OpenRouter API key in Settings to generate AI reports.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <Sparkles size={32} className="mb-4 text-muted-foreground" />
+                      <p className="text-sm font-medium text-foreground mb-1">
+                        {totalActivity} activities found
+                      </p>
+                      <p className="text-xs text-muted-foreground mb-4">
+                        Click "Generate Report" to create an AI-powered summary.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Activity Timeline - Sidebar */}
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-border bg-card">
+                <div className="border-b border-border p-4">
+                  <div className="flex items-center gap-2">
+                    <Clock size={16} className="text-muted-foreground" />
+                    <h3 className="font-semibold text-foreground">Activity Timeline</h3>
+                  </div>
+                </div>
+
+                {allActivities.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center p-8 text-center">
+                    <Clock size={24} className="mb-2 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">No activities yet</p>
+                  </div>
+                ) : (
+                  <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
+                    <div className="divide-y divide-border">
+                      {allActivities.slice(0, 20).map((activity) => (
+                        <div
+                          key={`${activity.source}-${activity.id}`}
+                          className="flex items-start gap-3 p-3 transition-colors hover:bg-surface-raised/50"
+                        >
+                          <div className="mt-0.5">
+                            {getActivityIcon(activity)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-foreground truncate">
+                              {activity.source === 'jira' 
+                                ? (activity as JiraActivity).issueSummary || (activity as JiraActivity).issueKey
+                                : activity.title
+                              }
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-xs text-muted-foreground">
+                                {formatDistanceToNow(activity.date)}
                               </span>
-                            </>
+                              {getSourceBadge(activity.source)}
+                            </div>
+                          </div>
+                          {activity.source !== 'notes' && 'url' in activity && activity.url && (
+                            <a
+                              href={activity.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <ExternalLink size={12} />
+                            </a>
                           )}
                         </div>
-                      </div>
-                      <ExternalLink size={14} className="mt-1 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                    </a>
-                  ))}
-                </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Stats Sidebar */}
-          <div className="space-y-4">
-            {/* Stats Cards */}
-            <div className="rounded-2xl border border-border bg-card p-6">
-              <h3 className="mb-4 font-semibold text-foreground">Activity Breakdown</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10">
-                      <GitCommit size={16} className="text-emerald-400" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">Commits</span>
+              {/* Quick Stats */}
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <h3 className="mb-3 font-semibold text-foreground">Breakdown</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Commits</span>
+                    <span className="font-medium text-foreground">{summary?.github.commits || 0}</span>
                   </div>
-                  <span className="text-lg font-semibold text-foreground">{summary?.commits || 0}</span>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
-                      <GitPullRequest size={16} className="text-violet-400" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">Pull Requests</span>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Pull Requests</span>
+                    <span className="font-medium text-foreground">{summary?.github.pullRequests || 0}</span>
                   </div>
-                  <span className="text-lg font-semibold text-foreground">{summary?.pullRequests || 0}</span>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
-                      <MessageSquare size={16} className="text-amber-400" />
-                    </div>
-                    <span className="text-sm text-muted-foreground">Code Reviews</span>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Code Reviews</span>
+                    <span className="font-medium text-foreground">{summary?.github.reviews || 0}</span>
                   </div>
-                  <span className="text-lg font-semibold text-foreground">{summary?.reviews || 0}</span>
-                </div>
-
-                <div className="border-t border-border pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-foreground">Total Activity</span>
-                    <span className="text-lg font-bold text-primary">{totalActivity}</span>
+                  <div className="h-px bg-border" />
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">JIRA Issues</span>
+                    <span className="font-medium text-foreground">{summary?.jira.issuesWorkedOn || 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Status Changes</span>
+                    <span className="font-medium text-foreground">{summary?.jira.transitions || 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Comments</span>
+                    <span className="font-medium text-foreground">{summary?.jira.comments || 0}</span>
+                  </div>
+                  {summary?.jira.timeLogged && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Time Logged</span>
+                      <span className="font-medium text-emerald-400">{summary.jira.timeLogged}</span>
+                    </div>
+                  )}
+                  <div className="h-px bg-border" />
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Notes</span>
+                    <span className="font-medium text-foreground">{summary?.notes.count || 0}</span>
                   </div>
                 </div>
               </div>
             </div>
-
-            {/* Quick Actions */}
-            <div className="rounded-2xl border border-border bg-card p-6">
-              <h3 className="mb-4 font-semibold text-foreground">Quick Actions</h3>
-              <div className="space-y-2">
-                <button
-                  onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-                  className="w-full rounded-lg border border-border px-4 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-surface-raised"
-                >
-                  Jump to Today
-                </button>
-                <button
-                  onClick={() => {
-                    const yesterday = new Date()
-                    yesterday.setDate(yesterday.getDate() - 1)
-                    setSelectedDate(yesterday.toISOString().split('T')[0])
-                  }}
-                  className="w-full rounded-lg border border-border px-4 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-surface-raised"
-                >
-                  Jump to Yesterday
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
+        </>
       )}
     </main>
   )
