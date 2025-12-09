@@ -81,7 +81,8 @@ export function Settings() {
             setUsername(config.username)
             setSelectedOrgs(config.organizations || [])
             setSelectedRepos(config.repositories || [])
-            fetchOrganizations(config.token)
+            // Fetch orgs - backend will use stored token
+            fetchOrganizations()
           }
         }
 
@@ -101,7 +102,7 @@ export function Settings() {
     loadConfig()
   }, [])
 
-  const fetchOrganizations = async (accessToken: string, clearCache = false) => {
+  const fetchOrganizations = async (clearCache = false) => {
     setLoadingOrgs(true)
     // Clear cached repositories when refreshing
     if (clearCache) {
@@ -109,9 +110,8 @@ export function Settings() {
       setExpandedOrgs([])
     }
     try {
-      const response = await fetch('http://localhost:3001/api/github/orgs', {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      })
+      // Backend uses stored token
+      const response = await fetch('http://localhost:3001/api/github/orgs')
       if (response.ok) {
         const orgs = await response.json()
         setOrganizations(orgs)
@@ -126,9 +126,8 @@ export function Settings() {
   const fetchRepositories = async (org: string) => {
     setLoadingRepos(org)
     try {
-      const response = await fetch(`http://localhost:3001/api/github/repos?org=${org}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      // Backend uses stored token
+      const response = await fetch(`http://localhost:3001/api/github/repos?org=${org}`)
       if (response.ok) {
         const repos = await response.json()
         // Sort repositories alphabetically by name
@@ -165,7 +164,8 @@ export function Settings() {
       if (response.ok && data.valid) {
         setIsConnected(true)
         setUsername(data.username)
-        fetchOrganizations(token)
+        // Token is now saved on backend, fetch orgs
+        fetchOrganizations()
       } else {
         setConnectionError(data.error || 'Invalid token')
         setIsConnected(false)
@@ -399,7 +399,7 @@ export function Settings() {
                   </p>
                 </div>
                 <button
-                  onClick={() => fetchOrganizations(token, true)}
+                  onClick={() => fetchOrganizations(true)}
                   disabled={loadingOrgs}
                   className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
                 >
