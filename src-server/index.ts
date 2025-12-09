@@ -980,34 +980,33 @@ api.post('/summary/generate', async (c) => {
   if (config.openrouter.apiKey && totalActivity > 0) {
     try {
       const dateLabel = isRange ? `${fromDate} to ${toDate} (${dates.length} days)` : fromDate
-      const summaryType = isRange ? 'period' : 'daily'
       
-      const prompt = `Write a brief ${summaryType} work summary for a software developer.
+      const prompt = `You are writing a professional work summary. Based on the activity data below, generate a concise report.
 
-${isRange ? `Period: ${dateLabel}` : `Date: ${fromDate}`}
+Activity Data:
+- ${commits.length} commits: ${commits.slice(0, 5).map(c => c.title).join(', ') || 'none'}
+- ${prs.length} pull requests
+- ${reviews.length} code reviews
+- ${jiraIssues.length} JIRA issues: ${jiraIssues.slice(0, 3).map(i => `${i.issueKey} ${i.issueSummary}`).join(', ') || 'none'}
+- ${jiraTransitions.length} status transitions
+- ${totalTimeHours > 0 ? `${totalTimeHours}h time logged` : 'no time logged'}
+- ${rangeNotes.length} notes updated
 
-GitHub: ${commits.length} commits, ${prs.length} PRs, ${reviews.length} reviews
-${commits.slice(0, 5).map(c => `- ${c.title}`).join('\n') || ''}
-
-JIRA: ${jiraIssues.length} issues, ${jiraTransitions.length} status changes, ${totalTimeHours > 0 ? `${totalTimeHours}h logged` : 'no time logged'}
-${jiraIssues.slice(0, 5).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || ''}
-
-Notes: ${rangeNotes.length} updated
-
----
-
-Generate a structured work report with these three sections:
+Generate ONLY these three sections (no date header, no metrics list):
 
 **Executive Summary**
-2-3 sentences summarizing the ${isRange ? 'period' : 'day'}'s work and overall progress.
+Write 2-3 sentences describing what was accomplished and the overall focus of the work.
 
 **Highlights**
-${isRange ? '4-6' : '3-5'} bullet points of the most significant accomplishments and work completed.
+• List ${isRange ? '4-5' : '3-4'} specific accomplishments as bullet points
+• Focus on impact and what was delivered, not raw numbers
+• Be specific about features, fixes, or improvements made
 
 **Next Steps**
-2-3 bullet points suggesting logical follow-up tasks based on the work done.
+• List 2-3 logical follow-up tasks or recommendations
+• Base these on the work that was done
 
-Keep it professional and concise. Use markdown formatting with bold headers.`
+Use bullet points (•) not dashes. Keep it professional and suitable for sharing with stakeholders.`
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -1018,7 +1017,7 @@ Keep it professional and concise. Use markdown formatting with bold headers.`
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: isRange ? 500 : 400,
+          max_tokens: isRange ? 450 : 350,
         })
       })
 

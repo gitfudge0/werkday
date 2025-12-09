@@ -22,24 +22,45 @@ import { formatDistanceToNow } from '@/lib/utils'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-// Simple markdown to HTML converter for AI reports
+// Markdown to HTML converter for AI reports with professional styling
 function formatMarkdown(text: string): string {
-  return text
-    // Bold text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    // Bullet points
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    // Wrap consecutive <li> items in <ul>
-    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-    // Paragraphs (double newlines)
-    .replace(/\n\n/g, '</p><p>')
-    // Single newlines within paragraphs
-    .replace(/\n/g, '<br/>')
-    // Wrap in paragraph
-    .replace(/^(.+)$/, '<p>$1</p>')
-    // Clean up empty paragraphs
-    .replace(/<p><\/p>/g, '')
-    .replace(/<p><br\/><\/p>/g, '')
+  // Split into sections by headers
+  const sections = text.split(/\*\*([^*]+)\*\*/).filter(Boolean)
+  
+  let html = ''
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i].trim()
+    
+    // Check if this is a header (Executive Summary, Highlights, Next Steps)
+    if (section === 'Executive Summary' || section === 'Highlights' || section === 'Next Steps') {
+      html += `<h4 class="text-sm font-semibold text-foreground mt-4 mb-2 first:mt-0">${section}</h4>`
+    } else if (section) {
+      // Process content
+      const lines = section.split('\n').filter(line => line.trim())
+      
+      // Check if this section has bullet points
+      const hasBullets = lines.some(line => line.trim().startsWith('•') || line.trim().startsWith('-'))
+      
+      if (hasBullets) {
+        html += '<ul class="space-y-1.5 mb-3">'
+        for (const line of lines) {
+          const content = line.trim().replace(/^[•\-]\s*/, '')
+          if (content) {
+            html += `<li class="text-sm text-muted-foreground flex gap-2"><span class="text-primary">•</span><span>${content}</span></li>`
+          }
+        }
+        html += '</ul>'
+      } else {
+        // Regular paragraph
+        const content = lines.join(' ').trim()
+        if (content) {
+          html += `<p class="text-sm text-muted-foreground mb-3 leading-relaxed">${content}</p>`
+        }
+      }
+    }
+  }
+  
+  return html
 }
 
 interface GitHubActivity {
@@ -475,13 +496,9 @@ export function Summaries() {
                   </div>
                 </div>
 
-                <div className="p-4">
+                <div className="p-5">
                   {summary?.aiReport ? (
-                    <div className="prose prose-sm prose-invert max-w-none">
-                      <div className="text-sm leading-relaxed text-foreground [&>p]:mb-3 [&>ul]:mb-3 [&>ul]:list-disc [&>ul]:pl-4 [&_strong]:text-foreground [&_li]:mb-1">
-                        <div dangerouslySetInnerHTML={{ __html: formatMarkdown(summary.aiReport) }} />
-                      </div>
-                    </div>
+                    <div dangerouslySetInnerHTML={{ __html: formatMarkdown(summary.aiReport) }} />
                   ) : totalActivity === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <FileText size={32} className="mb-4 text-muted-foreground" />
