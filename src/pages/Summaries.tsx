@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
 import { DateRangePicker } from '@/components/ui/date-range-picker'
+import { useToast } from '@/components/ui/toast'
 
 interface GitHubActivity {
   id: string
@@ -98,6 +99,7 @@ export function Summaries() {
   const [isSyncing, setIsSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasOpenRouter, setHasOpenRouter] = useState(false)
+  const { showToast } = useToast()
 
   // Format date for API (YYYY-MM-DD) - using local timezone
   const formatDateForApi = (date: Date): string => {
@@ -235,24 +237,27 @@ export function Summaries() {
       
       const report = await response.json()
       
-      // Generate PDF
+      // Generate PDF - Infographic Style
       const doc = new jsPDF()
       const pageWidth = doc.internal.pageSize.getWidth()
       const pageHeight = doc.internal.pageSize.getHeight()
-      const margin = 15
-      const maxWidth = pageWidth - margin * 2
+      const margin = 12
+      const contentWidth = pageWidth - margin * 2
       let y = 0
       
-      // Color palette
+      // Color palette - Clean blue/gray theme like the reference
       const colors = {
-        primary: { r: 79, g: 70, b: 229 },      // Indigo
-        github: { r: 16, g: 185, b: 129 },      // Emerald
-        jira: { r: 59, g: 130, b: 246 },        // Blue
-        notes: { r: 245, g: 158, b: 11 },       // Amber
-        dark: { r: 31, g: 41, b: 55 },
-        gray: { r: 107, g: 114, b: 128 },
-        lightGray: { r: 243, g: 244, b: 246 },
+        primary: { r: 66, g: 133, b: 183 },      // Steel blue
+        accent: { r: 192, g: 169, b: 131 },       // Warm tan/gold
+        github: { r: 66, g: 133, b: 183 },        // Steel blue
+        jira: { r: 192, g: 169, b: 131 },         // Tan
+        notes: { r: 140, g: 140, b: 140 },        // Gray
+        dark: { r: 51, g: 51, b: 51 },
+        gray: { r: 120, g: 120, b: 120 },
+        lightGray: { r: 230, g: 230, b: 230 },
+        veryLightGray: { r: 245, g: 245, b: 245 },
         white: { r: 255, g: 255, b: 255 },
+        headerBg: { r: 66, g: 133, b: 183 },
       }
       
       // Helper functions
@@ -260,201 +265,209 @@ export function Summaries() {
         doc.setTextColor(color.r, color.g, color.b)
       }
       
-      const setFillColor = (color: { r: number; g: number; b: number }) => {
+      const setFill = (color: { r: number; g: number; b: number }) => {
         doc.setFillColor(color.r, color.g, color.b)
       }
       
-      const checkPageBreak = (neededHeight: number) => {
-        if (y + neededHeight > pageHeight - 20) {
+      const setDraw = (color: { r: number; g: number; b: number }) => {
+        doc.setDrawColor(color.r, color.g, color.b)
+      }
+      
+      // Draw percentage circle (like the 35%, 34%, 31% in reference)
+      const drawPercentCircle = (cx: number, cy: number, radius: number, percent: number, color: { r: number; g: number; b: number }, label: string) => {
+        // Background circle
+        setFill(colors.veryLightGray)
+        doc.circle(cx, cy, radius, 'F')
+        
+        // Draw arc for percentage
+        if (percent > 0) {
+          const startAngle = -90
+          const endAngle = startAngle + (percent / 100) * 360
+          
+          setFill(color)
+          setDraw(color)
+          doc.setLineWidth(3)
+          
+          // Draw arc segments
+          const segments = Math.ceil(percent / 2)
+          for (let i = 0; i < segments; i++) {
+            const angle1 = (startAngle + (i / segments) * (endAngle - startAngle)) * Math.PI / 180
+            const angle2 = (startAngle + ((i + 1) / segments) * (endAngle - startAngle)) * Math.PI / 180
+            
+            const x1 = cx + Math.cos(angle1) * (radius - 1.5)
+            const y1 = cy + Math.sin(angle1) * (radius - 1.5)
+            const x2 = cx + Math.cos(angle2) * (radius - 1.5)
+            const y2 = cy + Math.sin(angle2) * (radius - 1.5)
+            
+            doc.line(x1, y1, x2, y2)
+          }
+        }
+        
+        // Center percentage text
+        doc.setFontSize(14)
+        doc.setFont('helvetica', 'bold')
+        setColor(colors.dark)
+        doc.text(`${Math.round(percent)}%`, cx, cy + 2, { align: 'center' })
+        
+        // Label below
+        doc.setFontSize(7)
+        doc.setFont('helvetica', 'normal')
+        setColor(colors.gray)
+        const labelLines = doc.splitTextToSize(label, radius * 2.5)
+        doc.text(labelLines, cx, cy + radius + 5, { align: 'center' })
+      }
+      
+      // Draw horizontal bar chart (like the industry chart in reference)
+      const drawHorizontalBar = (x: number, barY: number, maxWidth: number, value: number, maxValue: number, color: { r: number; g: number; b: number }, label: string, showValue = true) => {
+        const barHeight = 8
+        const barWidth = maxValue > 0 ? (value / maxValue) * maxWidth : 0
+        
+        // Label on left
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'normal')
+        setColor(colors.dark)
+        doc.text(label, x - 2, barY + 6, { align: 'right' })
+        
+        // Bar
+        setFill(color)
+        if (barWidth > 0) {
+          doc.rect(x, barY, Math.max(barWidth, 2), barHeight, 'F')
+        }
+        
+        // Value at end of bar
+        if (showValue && value > 0) {
+          doc.setFontSize(8)
+          doc.setFont('helvetica', 'bold')
+          setColor(colors.dark)
+          doc.text(value.toString(), x + barWidth + 3, barY + 6)
+        }
+      }
+      
+      // Draw big stat number (like +20 JOBS in reference)
+      const drawBigStat = (x: number, statY: number, value: string, label: string, color: { r: number; g: number; b: number }, sublabel?: string) => {
+        doc.setFontSize(28)
+        doc.setFont('helvetica', 'bold')
+        setColor(color)
+        doc.text(value, x, statY, { align: 'center' })
+        
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'normal')
+        setColor(colors.gray)
+        doc.text(label.toUpperCase(), x, statY + 8, { align: 'center' })
+        
+        if (sublabel) {
+          doc.setFontSize(6)
+          doc.text(sublabel, x, statY + 13, { align: 'center' })
+        }
+      }
+      
+      const checkPageBreak = (needed: number) => {
+        if (y + needed > pageHeight - 15) {
           doc.addPage()
-          y = 20
+          y = 15
           return true
         }
         return false
       }
       
-      // Draw donut chart
-      const drawDonutChart = (centerX: number, centerY: number, radius: number, data: Array<{ value: number; color: { r: number; g: number; b: number }; label: string }>) => {
-        const total = data.reduce((sum, d) => sum + d.value, 0)
-        if (total === 0) return
-        
-        let startAngle = -Math.PI / 2
-        const innerRadius = radius * 0.6
-        
-        data.forEach(item => {
-          if (item.value === 0) return
-          const sliceAngle = (item.value / total) * 2 * Math.PI
-          const endAngle = startAngle + sliceAngle
-          
-          // Draw arc segment
-          setFillColor(item.color)
-          doc.setDrawColor(255, 255, 255)
-          doc.setLineWidth(1)
-          
-          // Create path for donut segment
-          const segments = 50
-          const points: [number, number][] = []
-          
-          // Outer arc
-          for (let i = 0; i <= segments; i++) {
-            const angle = startAngle + (sliceAngle * i / segments)
-            points.push([
-              centerX + Math.cos(angle) * radius,
-              centerY + Math.sin(angle) * radius
-            ])
-          }
-          
-          // Inner arc (reverse)
-          for (let i = segments; i >= 0; i--) {
-            const angle = startAngle + (sliceAngle * i / segments)
-            points.push([
-              centerX + Math.cos(angle) * innerRadius,
-              centerY + Math.sin(angle) * innerRadius
-            ])
-          }
-          
-          // Draw as filled polygon
-          if (points.length > 2) {
-            doc.setFillColor(item.color.r, item.color.g, item.color.b)
-            const firstPoint = points[0]
-            doc.moveTo(firstPoint[0], firstPoint[1])
-            points.slice(1).forEach(p => doc.lineTo(p[0], p[1]))
-            doc.fill()
-          }
-          
-          startAngle = endAngle
-        })
-        
-        // Center text - total
-        doc.setFontSize(16)
-        doc.setFont('helvetica', 'bold')
-        setColor(colors.dark)
-        doc.text(total.toString(), centerX, centerY + 2, { align: 'center' })
-        doc.setFontSize(7)
-        doc.setFont('helvetica', 'normal')
-        setColor(colors.gray)
-        doc.text('activities', centerX, centerY + 7, { align: 'center' })
-      }
+      // === HEADER ===
+      setFill(colors.headerBg)
+      doc.rect(0, 0, pageWidth, 28, 'F')
       
-      // Draw horizontal bar
-      const drawBar = (x: number, barY: number, width: number, height: number, value: number, maxValue: number, color: { r: number; g: number; b: number }, label: string, showValue = true) => {
-        // Background bar
-        setFillColor(colors.lightGray)
-        doc.roundedRect(x, barY, width, height, 2, 2, 'F')
-        
-        // Value bar
-        const barWidth = maxValue > 0 ? (value / maxValue) * width : 0
-        if (barWidth > 0) {
-          setFillColor(color)
-          doc.roundedRect(x, barY, Math.max(barWidth, 4), height, 2, 2, 'F')
-        }
-        
-        // Label
-        doc.setFontSize(8)
-        doc.setFont('helvetica', 'normal')
-        setColor(colors.dark)
-        doc.text(label, x, barY - 2)
-        
-        // Value
-        if (showValue) {
-          doc.setFont('helvetica', 'bold')
-          doc.text(value.toString(), x + width + 5, barY + height - 1)
-        }
-      }
-      
-      // === PAGE 1: Header & Executive Summary ===
-      
-      // Header background
-      setFillColor(colors.primary)
-      doc.rect(0, 0, pageWidth, 45, 'F')
+      // Logo/Brand area (small circle like GE logo)
+      setFill(colors.white)
+      doc.circle(margin + 8, 14, 6, 'F')
+      doc.setFontSize(8)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.headerBg)
+      doc.text('W', margin + 8, 16, { align: 'center' })
       
       // Title
-      doc.setFontSize(24)
+      doc.setFontSize(16)
       doc.setFont('helvetica', 'bold')
       setColor(colors.white)
-      doc.text(report.title, margin, 22)
+      doc.text('WORK ACTIVITY BY THE NUMBERS', margin + 20, 16)
       
-      // Subtitle
-      doc.setFontSize(11)
+      y = 32
+      
+      // Subtitle / date info
+      doc.setFontSize(8)
       doc.setFont('helvetica', 'normal')
-      doc.text(`${report.dateRange}  •  Generated ${new Date(report.generatedAt).toLocaleDateString()}`, margin, 34)
+      setColor(colors.gray)
+      doc.text(`Report Period: ${report.dateRange}  |  Generated: ${new Date(report.generatedAt).toLocaleDateString()}`, margin, y)
       
-      y = 55
+      y = 42
       
-      // === Metrics Cards Row ===
-      const cardWidth = (maxWidth - 15) / 4
-      const cardHeight = 35
-      const cardY = y
+      // === TOP STATS ROW (like +20 JOBS / -2000 JOBS) ===
+      const statWidth = contentWidth / 4
       
-      // Card backgrounds
-      const cards = [
-        { label: 'Total', value: report.metrics.totalActivities, color: colors.primary },
-        { label: 'GitHub', value: report.metrics.githubTotal, color: colors.github },
-        { label: 'JIRA', value: report.metrics.jiraTotal, color: colors.jira },
-        { label: 'Notes', value: report.metrics.notesTotal, color: colors.notes },
-      ]
-      
-      cards.forEach((card, i) => {
-        const cardX = margin + i * (cardWidth + 5)
-        
-        // Card background
-        setFillColor(colors.lightGray)
-        doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 3, 3, 'F')
-        
-        // Colored left border
-        setFillColor(card.color)
-        doc.roundedRect(cardX, cardY, 4, cardHeight, 2, 2, 'F')
-        
-        // Value
-        doc.setFontSize(18)
-        doc.setFont('helvetica', 'bold')
-        setColor(colors.dark)
-        doc.text(card.value.toString(), cardX + 12, cardY + 15)
-        
-        // Label
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'normal')
-        setColor(colors.gray)
-        doc.text(card.label, cardX + 12, cardY + 25)
-      })
-      
-      y = cardY + cardHeight + 15
-      
-      // === Charts Section ===
-      // Donut chart on left, bar charts on right
-      const chartSectionY = y
-      
-      // Donut chart
-      const donutData = [
-        { value: report.metrics.githubTotal, color: colors.github, label: 'GitHub' },
-        { value: report.metrics.jiraTotal, color: colors.jira, label: 'JIRA' },
-        { value: report.metrics.notesTotal, color: colors.notes, label: 'Notes' },
-      ]
-      
-      drawDonutChart(margin + 35, chartSectionY + 30, 25, donutData)
-      
-      // Legend below donut
-      let legendY = chartSectionY + 62
-      donutData.forEach(item => {
-        setFillColor(item.color)
-        doc.circle(margin + 15, legendY, 3, 'F')
-        doc.setFontSize(8)
-        setColor(colors.dark)
-        doc.text(`${item.label}: ${item.value}`, margin + 22, legendY + 2)
-        legendY += 10
-      })
-      
-      // Bar charts on right side
-      const barX = margin + 85
-      const barWidth = maxWidth - 90
-      let barY = chartSectionY + 5
-      
-      // GitHub breakdown
-      doc.setFontSize(10)
+      // Draw section title
+      doc.setFontSize(9)
       doc.setFont('helvetica', 'bold')
-      setColor(colors.github)
-      doc.text('GitHub Breakdown', barX, barY)
-      barY += 8
+      setColor(colors.primary)
+      doc.text('Activity Overview', margin, y)
+      
+      y += 8
+      
+      // Big stats
+      const stats = [
+        { value: report.metrics.totalActivities.toString(), label: 'Total Activities', color: colors.primary },
+        { value: report.metrics.githubTotal.toString(), label: 'GitHub', color: colors.github },
+        { value: report.metrics.jiraTotal.toString(), label: 'JIRA', color: colors.jira },
+        { value: report.metrics.notesTotal.toString(), label: 'Notes', color: colors.notes },
+      ]
+      
+      stats.forEach((stat, i) => {
+        const x = margin + statWidth * i + statWidth / 2
+        drawBigStat(x, y + 12, stat.value, stat.label, stat.color)
+      })
+      
+      y += 35
+      
+      // Divider line
+      setDraw(colors.lightGray)
+      doc.setLineWidth(0.5)
+      doc.line(margin, y, pageWidth - margin, y)
+      
+      y += 8
+      
+      // === TWO COLUMN LAYOUT ===
+      const colWidth = (contentWidth - 10) / 2
+      const leftCol = margin
+      const rightCol = margin + colWidth + 10
+      
+      // LEFT COLUMN: Activity Distribution (percentage circles)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.primary)
+      doc.text('Activity Distribution', leftCol, y)
+      
+      // RIGHT COLUMN: GitHub Breakdown (bar chart)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.primary)
+      doc.text('GitHub Breakdown by Type', rightCol, y)
+      
+      y += 8
+      
+      // Percentage circles (left column)
+      const total = report.metrics.totalActivities || 1
+      const githubPct = (report.metrics.githubTotal / total) * 100
+      const jiraPct = (report.metrics.jiraTotal / total) * 100
+      const notesPct = (report.metrics.notesTotal / total) * 100
+      
+      const circleRadius = 15
+      const circleY = y + circleRadius + 5
+      const circleSpacing = colWidth / 3
+      
+      drawPercentCircle(leftCol + circleSpacing * 0.5, circleY, circleRadius, githubPct, colors.github, 'GitHub')
+      drawPercentCircle(leftCol + circleSpacing * 1.5, circleY, circleRadius, jiraPct, colors.jira, 'JIRA')
+      drawPercentCircle(leftCol + circleSpacing * 2.5, circleY, circleRadius, notesPct, colors.notes, 'Notes')
+      
+      // Bar charts (right column)
+      const barStartX = rightCol + 45
+      const barMaxWidth = colWidth - 55
+      let barY = y + 5
       
       const githubMax = Math.max(
         report.githubSection.commits.length,
@@ -463,19 +476,26 @@ export function Summaries() {
         1
       )
       
-      drawBar(barX, barY, barWidth, 6, report.githubSection.commits.length, githubMax, colors.github, 'Commits')
-      barY += 15
-      drawBar(barX, barY, barWidth, 6, report.githubSection.pullRequests.length, githubMax, { r: 124, g: 58, b: 237 }, 'Pull Requests')
-      barY += 15
-      drawBar(barX, barY, barWidth, 6, report.githubSection.reviews.length, githubMax, { r: 217, g: 119, b: 6 }, 'Reviews')
-      barY += 20
+      drawHorizontalBar(barStartX, barY, barMaxWidth, report.githubSection.commits.length, githubMax, colors.github, 'Commits')
+      barY += 14
+      drawHorizontalBar(barStartX, barY, barMaxWidth, report.githubSection.pullRequests.length, githubMax, colors.accent, 'Pull Requests')
+      barY += 14
+      drawHorizontalBar(barStartX, barY, barMaxWidth, report.githubSection.reviews.length, githubMax, colors.notes, 'Reviews')
       
-      // JIRA breakdown
-      doc.setFontSize(10)
+      y = Math.max(circleY + circleRadius + 15, barY + 15)
+      
+      // === JIRA BREAKDOWN ===
+      checkPageBreak(50)
+      
+      doc.setFontSize(9)
       doc.setFont('helvetica', 'bold')
-      setColor(colors.jira)
-      doc.text('JIRA Breakdown', barX, barY)
-      barY += 8
+      setColor(colors.accent)
+      doc.text('JIRA Activity Breakdown', leftCol, y)
+      
+      y += 8
+      
+      const jiraBarStartX = leftCol + 50
+      const jiraBarMaxWidth = contentWidth - 60
       
       const jiraMax = Math.max(
         report.jiraSection.issues.length,
@@ -484,284 +504,253 @@ export function Summaries() {
         1
       )
       
-      drawBar(barX, barY, barWidth, 6, report.jiraSection.issues.length, jiraMax, colors.jira, 'Issues')
-      barY += 15
-      drawBar(barX, barY, barWidth, 6, report.jiraSection.transitions.length, jiraMax, { r: 124, g: 58, b: 237 }, 'Transitions')
-      barY += 15
-      drawBar(barX, barY, barWidth, 6, report.jiraSection.worklogs.length, jiraMax, colors.github, 'Worklogs')
+      drawHorizontalBar(jiraBarStartX, y, jiraBarMaxWidth, report.jiraSection.issues.length, jiraMax, colors.jira, 'Issues')
+      y += 14
+      drawHorizontalBar(jiraBarStartX, y, jiraBarMaxWidth, report.jiraSection.transitions.length, jiraMax, colors.accent, 'Transitions')
+      y += 14
+      drawHorizontalBar(jiraBarStartX, y, jiraBarMaxWidth, report.jiraSection.worklogs.length, jiraMax, colors.notes, 'Worklogs')
       
-      y = Math.max(legendY, barY) + 15
+      if (report.metrics.timeLogged) {
+        y += 10
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'normal')
+        setColor(colors.gray)
+        doc.text(`Time Logged: ${report.metrics.timeLogged}`, leftCol, y)
+      }
       
-      // === Executive Summary Section ===
-      checkPageBreak(60)
-      
-      // Section header
-      setFillColor(colors.primary)
-      doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-      doc.setFontSize(11)
-      doc.setFont('helvetica', 'bold')
-      setColor(colors.white)
-      doc.text('EXECUTIVE SUMMARY', margin + 5, y + 6)
       y += 15
       
-      // Summary text in a box
-      setFillColor({ r: 249, g: 250, b: 251 })
-      const summaryLines = doc.splitTextToSize(report.executiveSummary, maxWidth - 16)
-      const summaryHeight = summaryLines.length * 5 + 12
-      doc.roundedRect(margin, y, maxWidth, summaryHeight, 3, 3, 'F')
+      // Divider
+      setDraw(colors.lightGray)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 10
+      
+      // === EXECUTIVE SUMMARY ===
+      checkPageBreak(50)
       
       doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.primary)
+      doc.text('Executive Summary', leftCol, y)
+      
+      y += 6
+      
+      doc.setFontSize(9)
       doc.setFont('helvetica', 'normal')
       setColor(colors.dark)
-      doc.text(summaryLines, margin + 8, y + 10)
-      y += summaryHeight + 10
+      const summaryLines = doc.splitTextToSize(report.executiveSummary, contentWidth)
+      doc.text(summaryLines, leftCol, y)
+      y += summaryLines.length * 4 + 8
       
-      // === Key Highlights ===
+      // === KEY HIGHLIGHTS ===
       if (report.highlights && report.highlights.length > 0) {
-        checkPageBreak(50)
+        checkPageBreak(40)
         
-        setFillColor(colors.github)
-        doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-        doc.setFontSize(11)
+        doc.setFontSize(10)
         doc.setFont('helvetica', 'bold')
-        setColor(colors.white)
-        doc.text('KEY HIGHLIGHTS', margin + 5, y + 6)
-        y += 15
+        setColor(colors.github)
+        doc.text('Key Highlights', leftCol, y)
         
-        report.highlights.forEach((highlight: string, index: number) => {
-          checkPageBreak(15)
+        y += 6
+        
+        report.highlights.forEach((highlight: string) => {
+          checkPageBreak(12)
           
-          // Numbered circle
-          setFillColor(colors.github)
-          doc.circle(margin + 5, y + 2, 4, 'F')
+          // Bullet
+          setFill(colors.github)
+          doc.circle(leftCol + 2, y + 1, 1.5, 'F')
+          
+          // Text
           doc.setFontSize(8)
-          doc.setFont('helvetica', 'bold')
-          setColor(colors.white)
-          doc.text((index + 1).toString(), margin + 5, y + 4, { align: 'center' })
-          
-          // Highlight text
-          doc.setFontSize(9)
           doc.setFont('helvetica', 'normal')
           setColor(colors.dark)
-          const lines = doc.splitTextToSize(highlight, maxWidth - 20)
-          doc.text(lines, margin + 15, y + 3)
-          y += lines.length * 5 + 6
+          const lines = doc.splitTextToSize(highlight, contentWidth - 10)
+          doc.text(lines, leftCol + 8, y + 2)
+          y += lines.length * 4 + 3
         })
         
         y += 5
       }
       
-      // === Next Steps ===
+      // === NEXT STEPS ===
       if (report.nextSteps && report.nextSteps.length > 0) {
-        checkPageBreak(50)
+        checkPageBreak(40)
         
-        setFillColor(colors.primary)
-        doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-        doc.setFontSize(11)
+        doc.setFontSize(10)
         doc.setFont('helvetica', 'bold')
-        setColor(colors.white)
-        doc.text('RECOMMENDED NEXT STEPS', margin + 5, y + 6)
-        y += 15
+        setColor(colors.accent)
+        doc.text('Recommended Next Steps', leftCol, y)
+        
+        y += 6
         
         report.nextSteps.forEach((step: string, index: number) => {
-          checkPageBreak(15)
+          checkPageBreak(12)
           
-          // Arrow indicator
-          setFillColor(colors.primary)
-          doc.triangle(margin + 3, y, margin + 8, y + 3, margin + 3, y + 6, 'F')
+          // Number
+          doc.setFontSize(8)
+          doc.setFont('helvetica', 'bold')
+          setColor(colors.accent)
+          doc.text(`${index + 1}.`, leftCol, y + 2)
           
-          // Step text
-          doc.setFontSize(9)
+          // Text
           doc.setFont('helvetica', 'normal')
           setColor(colors.dark)
-          const lines = doc.splitTextToSize(step, maxWidth - 20)
-          doc.text(lines, margin + 15, y + 4)
-          y += lines.length * 5 + 6
+          const lines = doc.splitTextToSize(step, contentWidth - 10)
+          doc.text(lines, leftCol + 8, y + 2)
+          y += lines.length * 4 + 3
         })
         
         y += 5
       }
       
-      // === Detailed Activity (new page) ===
+      // === PAGE 2: DETAILED ACTIVITY ===
       doc.addPage()
+      y = 15
+      
+      // Page 2 Header
+      setFill(colors.headerBg)
+      doc.rect(0, 0, pageWidth, 12, 'F')
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.white)
+      doc.text('DETAILED ACTIVITY LOG', margin, 8)
+      
       y = 20
       
       // GitHub Details
-      if (report.metrics.githubTotal > 0) {
-        setFillColor(colors.github)
-        doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-        doc.setFontSize(11)
+      if (report.githubSection.commits.length > 0 || report.githubSection.pullRequests.length > 0) {
+        doc.setFontSize(10)
         doc.setFont('helvetica', 'bold')
-        setColor(colors.white)
-        doc.text('GITHUB ACTIVITY DETAILS', margin + 5, y + 6)
-        y += 12
-        
-        // Summary text
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'italic')
-        setColor(colors.gray)
-        const ghSummaryLines = doc.splitTextToSize(report.githubSection.summary, maxWidth)
-        doc.text(ghSummaryLines, margin, y + 4)
-        y += ghSummaryLines.length * 4 + 8
+        setColor(colors.github)
+        doc.text('GitHub Activity', margin, y)
+        y += 5
         
         // Commits
         if (report.githubSection.commits.length > 0) {
-          doc.setFontSize(9)
+          doc.setFontSize(8)
           doc.setFont('helvetica', 'bold')
-          setColor(colors.github)
+          setColor(colors.dark)
           doc.text(`Commits (${report.githubSection.commits.length})`, margin, y)
-          y += 5
+          y += 4
           
-          report.githubSection.commits.slice(0, 8).forEach((commit: { title: string; repo: string }) => {
-            checkPageBreak(10)
-            doc.setFontSize(8)
+          report.githubSection.commits.slice(0, 10).forEach((commit: { title: string; repo: string }) => {
+            checkPageBreak(8)
+            doc.setFontSize(7)
             doc.setFont('helvetica', 'normal')
-            setColor(colors.dark)
-            const title = commit.title.length > 60 ? commit.title.substring(0, 60) + '...' : commit.title
-            doc.text(`• ${title}`, margin + 3, y)
             setColor(colors.gray)
-            doc.text(commit.repo, margin + maxWidth - doc.getTextWidth(commit.repo), y)
-            y += 5
+            const title = commit.title.length > 70 ? commit.title.substring(0, 70) + '...' : commit.title
+            doc.text(`• ${title}`, margin + 3, y)
+            doc.setFontSize(6)
+            doc.text(commit.repo, pageWidth - margin - doc.getTextWidth(commit.repo), y)
+            y += 4
           })
-          y += 5
+          y += 4
         }
         
         // PRs
         if (report.githubSection.pullRequests.length > 0) {
-          checkPageBreak(20)
-          doc.setFontSize(9)
+          checkPageBreak(15)
+          doc.setFontSize(8)
           doc.setFont('helvetica', 'bold')
-          setColor({ r: 124, g: 58, b: 237 })
+          setColor(colors.dark)
           doc.text(`Pull Requests (${report.githubSection.pullRequests.length})`, margin, y)
-          y += 5
+          y += 4
           
-          report.githubSection.pullRequests.slice(0, 5).forEach((pr: { title: string; repo: string; status: string }) => {
-            checkPageBreak(10)
-            doc.setFontSize(8)
+          report.githubSection.pullRequests.slice(0, 5).forEach((pr: { title: string; status: string }) => {
+            checkPageBreak(8)
+            doc.setFontSize(7)
             doc.setFont('helvetica', 'normal')
-            setColor(colors.dark)
-            const title = pr.title.length > 50 ? pr.title.substring(0, 50) + '...' : pr.title
+            setColor(colors.gray)
+            const title = pr.title.length > 60 ? pr.title.substring(0, 60) + '...' : pr.title
             doc.text(`• ${title} [${pr.status}]`, margin + 3, y)
-            y += 5
+            y += 4
           })
-          y += 5
+          y += 4
         }
         
         y += 5
       }
       
       // JIRA Details
-      if (report.metrics.jiraTotal > 0) {
-        checkPageBreak(40)
+      if (report.jiraSection.issues.length > 0) {
+        checkPageBreak(30)
         
-        setFillColor(colors.jira)
-        doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-        doc.setFontSize(11)
+        doc.setFontSize(10)
         doc.setFont('helvetica', 'bold')
-        setColor(colors.white)
-        doc.text('JIRA ACTIVITY DETAILS', margin + 5, y + 6)
-        y += 12
+        setColor(colors.jira)
+        doc.text('JIRA Activity', margin, y)
+        y += 5
         
-        // Summary text
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'italic')
-        setColor(colors.gray)
-        const jiraSummaryLines = doc.splitTextToSize(report.jiraSection.summary, maxWidth)
-        doc.text(jiraSummaryLines, margin, y + 4)
-        y += jiraSummaryLines.length * 4 + 8
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'bold')
+        setColor(colors.dark)
+        doc.text(`Issues (${report.jiraSection.issues.length})`, margin, y)
+        y += 4
         
-        // Issues
-        if (report.jiraSection.issues.length > 0) {
-          doc.setFontSize(9)
+        report.jiraSection.issues.slice(0, 10).forEach((issue: { key: string; summary: string }) => {
+          checkPageBreak(8)
+          doc.setFontSize(7)
           doc.setFont('helvetica', 'bold')
           setColor(colors.jira)
-          doc.text(`Issues Worked On (${report.jiraSection.issues.length})`, margin, y)
-          y += 5
-          
-          report.jiraSection.issues.slice(0, 8).forEach((issue: { key: string; summary: string }) => {
-            checkPageBreak(10)
-            doc.setFontSize(8)
-            doc.setFont('helvetica', 'bold')
-            setColor(colors.jira)
-            doc.text(issue.key, margin + 3, y)
-            doc.setFont('helvetica', 'normal')
-            setColor(colors.dark)
-            const summary = issue.summary.length > 50 ? issue.summary.substring(0, 50) + '...' : issue.summary
-            doc.text(summary, margin + 25, y)
-            y += 5
-          })
-          y += 5
-        }
-        
-        // Transitions
-        if (report.jiraSection.transitions.length > 0) {
-          checkPageBreak(20)
-          doc.setFontSize(9)
-          doc.setFont('helvetica', 'bold')
-          setColor({ r: 124, g: 58, b: 237 })
-          doc.text(`Status Changes (${report.jiraSection.transitions.length})`, margin, y)
-          y += 5
-          
-          report.jiraSection.transitions.slice(0, 5).forEach((t: { key: string; from: string; to: string }) => {
-            checkPageBreak(10)
-            doc.setFontSize(8)
-            doc.setFont('helvetica', 'normal')
-            setColor(colors.dark)
-            doc.text(`• ${t.key}: ${t.from} → ${t.to}`, margin + 3, y)
-            y += 5
-          })
-          y += 5
-        }
+          doc.text(issue.key, margin + 3, y)
+          doc.setFont('helvetica', 'normal')
+          setColor(colors.gray)
+          const summary = issue.summary.length > 55 ? issue.summary.substring(0, 55) + '...' : issue.summary
+          doc.text(summary, margin + 22, y)
+          y += 4
+        })
         
         y += 5
       }
       
-      // === Conclusion ===
-      checkPageBreak(40)
+      // === CONCLUSION ===
+      checkPageBreak(30)
       
-      setFillColor(colors.dark)
-      doc.roundedRect(margin, y, maxWidth, 8, 2, 2, 'F')
-      doc.setFontSize(11)
-      doc.setFont('helvetica', 'bold')
-      setColor(colors.white)
-      doc.text('CONCLUSION', margin + 5, y + 6)
-      y += 15
-      
-      setFillColor({ r: 249, g: 250, b: 251 })
-      const conclusionLines = doc.splitTextToSize(report.conclusion, maxWidth - 16)
-      const conclusionHeight = conclusionLines.length * 5 + 12
-      doc.roundedRect(margin, y, maxWidth, conclusionHeight, 3, 3, 'F')
+      setDraw(colors.lightGray)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 8
       
       doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      setColor(colors.primary)
+      doc.text('Conclusion', margin, y)
+      y += 5
+      
+      doc.setFontSize(8)
       doc.setFont('helvetica', 'normal')
       setColor(colors.dark)
-      doc.text(conclusionLines, margin + 8, y + 10)
+      const conclusionLines = doc.splitTextToSize(report.conclusion, contentWidth)
+      doc.text(conclusionLines, margin, y)
       
-      // === Footer on all pages ===
+      // === FOOTER ON ALL PAGES ===
       const pageCount = doc.getNumberOfPages()
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i)
         
         // Footer line
-        doc.setDrawColor(229, 231, 235)
-        doc.setLineWidth(0.5)
-        doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12)
+        setDraw(colors.lightGray)
+        doc.setLineWidth(0.3)
+        doc.line(margin, pageHeight - 10, pageWidth - margin, pageHeight - 10)
         
         // Footer text
-        doc.setFontSize(8)
+        doc.setFontSize(7)
         doc.setFont('helvetica', 'normal')
         setColor(colors.gray)
-        doc.text('Generated by Werkday', margin, pageHeight - 6)
-        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin - 20, pageHeight - 6)
+        doc.text('Generated by Werkday', margin, pageHeight - 5)
+        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin - 15, pageHeight - 5)
       }
       
       // Download
       const filename = `werkday-report-${fromDate}${toDate !== fromDate ? `-to-${toDate}` : ''}.pdf`
       doc.save(filename)
       
+      // Show success toast
+      showToast(`Report downloaded: ${filename}`, 'success')
+      
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate PDF'
       setError(message)
+      showToast(message, 'error')
     } finally {
       setIsDownloading(false)
     }

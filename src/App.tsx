@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Dashboard, GitHub, JIRA, Notes, Settings, Summaries } from '@/pages'
+import { ToastProvider } from '@/components/ui/toast'
 
 function App() {
   const [serverStatus, setServerStatus] = useState<'starting' | 'running' | 'error'>('starting')
@@ -52,25 +53,27 @@ function App() {
   }, [])
 
   return (
-    <BrowserRouter>
-      <div className="flex h-screen overflow-hidden bg-background">
-        {/* Sidebar */}
-        <Sidebar />
+    <ToastProvider>
+      <BrowserRouter>
+        <div className="flex h-screen overflow-hidden bg-background">
+          {/* Sidebar */}
+          <Sidebar />
 
-        {/* Main Content */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <Routes>
-            <Route path="/" element={<Dashboard serverStatus={serverStatus} />} />
-            <Route path="/github" element={<GitHub />} />
-            <Route path="/jira" element={<JIRA />} />
-            <Route path="/notes" element={<Notes />} />
-            <Route path="/reports" element={<Summaries />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          {/* Main Content */}
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <Routes>
+              <Route path="/" element={<Dashboard serverStatus={serverStatus} />} />
+              <Route path="/github" element={<GitHub />} />
+              <Route path="/jira" element={<JIRA />} />
+              <Route path="/notes" element={<Notes />} />
+              <Route path="/reports" element={<Summaries />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
         </div>
-      </div>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ToastProvider>
   )
 }
 
