@@ -336,6 +336,16 @@ export function Summaries() {
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Sync Button */}
+          <button
+            onClick={syncData}
+            disabled={isSyncing}
+            className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Syncing...' : 'Sync'}
+          </button>
+
           {/* Date Range Picker */}
           <Popover open={isCalendarOpen} onOpenChange={handleCalendarOpenChange}>
             <PopoverTrigger asChild>
