@@ -361,7 +361,7 @@ export function Dashboard({ serverStatus }: DashboardProps) {
                       comments: weekTotals.comments,
                       worklogs: weekTotals.worklogs
                     }}
-                    notes={weekTotals.notes}
+                    notes={totalNotes}
                     height={240}
                   />
                 </div>
@@ -428,7 +428,7 @@ export function Dashboard({ serverStatus }: DashboardProps) {
                   ) : (
                     <div className="flex flex-col items-center justify-center py-8 text-center">
                       <Sparkles size={32} className="mb-3 text-muted-foreground" />
-                      <p className="text-sm font-medium text-foreground mb-1">{totalActivity} activities today</p>
+                      <p className="text-sm font-medium text-foreground mb-1">{totalActivity} activities</p>
                       <p className="text-xs text-muted-foreground mb-3">
                         Generate an AI summary in the Reports page.
                       </p>
