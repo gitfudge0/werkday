@@ -1,0 +1,503 @@
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+import {
+  getConfig,
+  saveConfig,
+  getGitHubCache,
+  addGitHubActivities,
+  saveDailySummary,
+  getDailySummary,
+  getNotes,
+  saveNote,
+  deleteNote,
+  type AppConfig,
+  type GitHubActivity,
+} from './storage'
+
+const app = new Hono()
+
+// GitHub API helper
+const githubFetch = async (endpoint: string, token: string) => {
+  const response = await fetch(`https://api.github.com${endpoint}`, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'Werkday-App'
+    }
+  })
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || `GitHub API error: ${response.status}`)
+  }
+  
+  return response.json()
+}
+
+// Middleware
+app.use('*', logger())
+app.use('*', cors({
+  origin: ['http://localhost:5173', 'tauri://localhost'],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+}))
+
+// Health check
+app.get('/health', (c) => {
+  return c.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// API routes
+const api = new Hono()
+
+// ============== GitHub Routes ==============
+
+// Check GitHub connection status
+api.get('/github/status', async (c) => {
+  const config = await getConfig()
+  return c.json({
+    connected: !!config.github.token,
+    username: config.github.username,
+    avatarUrl: config.github.avatarUrl
+  })
+})
+
+// Get saved GitHub config (without exposing token)
+api.get('/github/config', async (c) => {
+  const config = await getConfig()
+  return c.json({
+    token: config.github.token ? '***' : null,
+    username: config.github.username,
+    avatarUrl: config.github.avatarUrl,
+    organizations: config.github.organizations,
+    repositories: config.github.repositories
+  })
+})
+
+// Save GitHub config
+api.post('/github/config', async (c) => {
+  const body = await c.req.json()
+  const config = await getConfig()
+  
+  await saveConfig({
+    github: {
+      ...config.github,
+      token: body.token ?? config.github.token,
+      username: body.username ?? config.github.username,
+      avatarUrl: body.avatarUrl ?? config.github.avatarUrl,
+      organizations: body.organizations ?? config.github.organizations,
+      repositories: body.repositories ?? config.github.repositories,
+    }
+  })
+  
+  return c.json({ success: true })
+})
+
+// Validate GitHub token
+api.post('/github/validate', async (c) => {
+  const { token } = await c.req.json()
+  
+  if (!token) {
+    return c.json({ valid: false, error: 'Token is required' }, 400)
+  }
+
+  try {
+    const user = await githubFetch('/user', token)
+    
+    // Save the token and user info
+    const config = await getConfig()
+    await saveConfig({
+      github: {
+        ...config.github,
+        token,
+        username: user.login,
+        avatarUrl: user.avatar_url,
+      }
+    })
+    
+    return c.json({
+      valid: true,
+      username: user.login,
+      name: user.name,
+      avatar_url: user.avatar_url
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Validation failed'
+    return c.json({ valid: false, error: message }, 401)
+  }
+})
+
+// Disconnect GitHub
+api.post('/github/disconnect', async (c) => {
+  await saveConfig({
+    github: {
+      token: null,
+      username: null,
+      avatarUrl: null,
+      organizations: [],
+      repositories: [],
+    }
+  })
+  return c.json({ success: true })
+})
+
+// Get user's organizations
+api.get('/github/orgs', async (c) => {
+  const config = await getConfig()
+  const authHeader = c.req.header('Authorization')
+  const token = authHeader?.replace('Bearer ', '') || config.github.token
+  
+  if (!token) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  try {
+    const orgs = await githubFetch('/user/orgs', token)
+    return c.json(orgs.map((org: any) => ({
+      id: org.id,
+      login: org.login,
+      avatar_url: org.avatar_url,
+      description: org.description
+    })))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch orgs'
+    return c.json({ error: message }, 500)
+  }
+})
+
+// Get repositories for org or user
+api.get('/github/repos', async (c) => {
+  const config = await getConfig()
+  const authHeader = c.req.header('Authorization')
+  const token = authHeader?.replace('Bearer ', '') || config.github.token
+  const org = c.req.query('org')
+  
+  if (!token) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  try {
+    let repos
+    if (org && org !== config.github.username) {
+      repos = await githubFetch(`/orgs/${org}/repos?per_page=100&sort=updated`, token)
+    } else {
+      repos = await githubFetch('/user/repos?per_page=100&sort=updated&affiliation=owner', token)
+    }
+    
+    return c.json(repos.map((repo: any) => ({
+      id: repo.id,
+      name: repo.name,
+      full_name: repo.full_name,
+      private: repo.private,
+      description: repo.description,
+      updated_at: repo.updated_at
+    })))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch repos'
+    return c.json({ error: message }, 500)
+  }
+})
+
+// Get comprehensive GitHub activity and cache it
+api.get('/github/activity', async (c) => {
+  const config = await getConfig()
+  const token = config.github.token
+  const since = c.req.query('since') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const useCache = c.req.query('cache') !== 'false'
+  
+  if (!token || !config.github.username) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  // Check cache first
+  if (useCache) {
+    const cache = await getGitHubCache()
+    if (cache.lastSync) {
+      const cacheAge = Date.now() - new Date(cache.lastSync).getTime()
+      // Use cache if less than 5 minutes old
+      if (cacheAge < 5 * 60 * 1000) {
+        const sinceDate = new Date(since)
+        const filteredActivities = cache.activities.filter(
+          a => new Date(a.date) >= sinceDate
+        )
+        return c.json({
+          commits: filteredActivities.filter(a => a.type === 'commit'),
+          pullRequests: filteredActivities.filter(a => a.type === 'pr'),
+          reviews: filteredActivities.filter(a => a.type === 'review'),
+          fromCache: true,
+          lastSync: cache.lastSync
+        })
+      }
+    }
+  }
+
+  try {
+    const username = config.github.username
+    const sinceDate = since.split('T')[0]
+
+    // Fetch all activity types in parallel
+    const [commitsResult, prsResult, reviewsResult] = await Promise.all([
+      githubFetch(
+        `/search/commits?q=author:${username}+committer-date:>=${sinceDate}&sort=committer-date&order=desc&per_page=50`,
+        token
+      ).catch(() => ({ items: [] })),
+      githubFetch(
+        `/search/issues?q=author:${username}+is:pr+updated:>=${sinceDate}&sort=updated&order=desc&per_page=50`,
+        token
+      ).catch(() => ({ items: [] })),
+      githubFetch(
+        `/search/issues?q=reviewed-by:${username}+is:pr+updated:>=${sinceDate}&sort=updated&order=desc&per_page=50`,
+        token
+      ).catch(() => ({ items: [] }))
+    ])
+
+    const commits = (commitsResult.items || []).map((c: any) => ({
+      id: c.sha,
+      type: 'commit' as const,
+      title: c.commit.message.split('\n')[0],
+      repo: c.repository.full_name,
+      date: c.commit.committer.date,
+      url: c.html_url
+    }))
+
+    const pullRequests = (prsResult.items || []).map((pr: any) => ({
+      id: `pr-${pr.id}`,
+      type: 'pr' as const,
+      title: pr.title,
+      repo: pr.repository_url.split('/').slice(-2).join('/'),
+      date: pr.updated_at,
+      url: pr.html_url,
+      status: pr.pull_request?.merged_at ? 'merged' : pr.state as 'open' | 'closed'
+    }))
+
+    const reviews = (reviewsResult.items || [])
+      .filter((r: any) => r.user.login !== username)
+      .map((r: any) => ({
+        id: `review-${r.id}`,
+        type: 'review' as const,
+        title: r.title,
+        repo: r.repository_url.split('/').slice(-2).join('/'),
+        date: r.updated_at,
+        url: r.html_url
+      }))
+
+    // Cache the activities
+    const allActivities: GitHubActivity[] = [...commits, ...pullRequests, ...reviews]
+    await addGitHubActivities(allActivities)
+
+    return c.json({
+      commits,
+      pullRequests,
+      reviews,
+      fromCache: false,
+      lastSync: new Date().toISOString()
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch activity'
+    return c.json({ error: message }, 500)
+  }
+})
+
+// Get cached GitHub activity
+api.get('/github/cache', async (c) => {
+  const cache = await getGitHubCache()
+  return c.json(cache)
+})
+
+// ============== Summary Routes ==============
+
+api.get('/summary/daily', async (c) => {
+  const date = c.req.query('date') || new Date().toISOString().split('T')[0]
+  
+  // Check if we have a cached summary
+  const cached = await getDailySummary(date)
+  if (cached) {
+    return c.json(cached)
+  }
+
+  // Otherwise return empty structure
+  return c.json({
+    date,
+    generatedAt: null,
+    commits: 0,
+    pullRequests: 0,
+    reviews: 0,
+    aiSummary: null,
+    activities: []
+  })
+})
+
+api.post('/summary/generate', async (c) => {
+  const { date } = await c.req.json()
+  const targetDate = date || new Date().toISOString().split('T')[0]
+  
+  const config = await getConfig()
+  
+  // Fetch GitHub activity for the date
+  const cache = await getGitHubCache()
+  const dayStart = new Date(targetDate)
+  dayStart.setHours(0, 0, 0, 0)
+  const dayEnd = new Date(targetDate)
+  dayEnd.setHours(23, 59, 59, 999)
+  
+  const dayActivities = cache.activities.filter(a => {
+    const actDate = new Date(a.date)
+    return actDate >= dayStart && actDate <= dayEnd
+  })
+
+  const commits = dayActivities.filter(a => a.type === 'commit')
+  const prs = dayActivities.filter(a => a.type === 'pr')
+  const reviews = dayActivities.filter(a => a.type === 'review')
+
+  // Generate AI summary if OpenRouter is configured
+  let aiSummary: string | null = null
+  
+  if (config.openrouter.apiKey && dayActivities.length > 0) {
+    try {
+      const prompt = `Summarize this developer's workday in 2-3 sentences:
+      
+Commits (${commits.length}):
+${commits.map(c => `- ${c.title} (${c.repo})`).join('\n') || 'None'}
+
+Pull Requests (${prs.length}):
+${prs.map(p => `- ${p.title} (${p.repo}) - ${p.status}`).join('\n') || 'None'}
+
+Code Reviews (${reviews.length}):
+${reviews.map(r => `- ${r.title} (${r.repo})`).join('\n') || 'None'}
+
+Be concise and focus on the impact of the work done.`
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.openrouter.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.openrouter.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 200,
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        aiSummary = data.choices?.[0]?.message?.content || null
+      }
+    } catch (error) {
+      console.error('Failed to generate AI summary:', error)
+    }
+  }
+
+  const summary = {
+    date: targetDate,
+    generatedAt: new Date().toISOString(),
+    commits: commits.length,
+    pullRequests: prs.length,
+    reviews: reviews.length,
+    aiSummary,
+    activities: dayActivities
+  }
+
+  // Save the summary
+  await saveDailySummary(summary)
+
+  return c.json(summary)
+})
+
+// ============== Notes Routes ==============
+
+api.get('/notes', async (c) => {
+  const notes = await getNotes()
+  return c.json(notes)
+})
+
+api.post('/notes', async (c) => {
+  const body = await c.req.json()
+  const note = {
+    id: body.id || crypto.randomUUID(),
+    title: body.title || 'Untitled',
+    content: body.content || '',
+    createdAt: body.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tags: body.tags || []
+  }
+  await saveNote(note)
+  return c.json(note)
+})
+
+api.delete('/notes/:id', async (c) => {
+  const id = c.req.param('id')
+  await deleteNote(id)
+  return c.json({ success: true })
+})
+
+// ============== Config Routes ==============
+
+api.get('/config', async (c) => {
+  const config = await getConfig()
+  // Don't expose sensitive tokens
+  return c.json({
+    ...config,
+    github: {
+      ...config.github,
+      token: config.github.token ? '***' : null
+    },
+    openrouter: {
+      ...config.openrouter,
+      apiKey: config.openrouter.apiKey ? '***' : null
+    }
+  })
+})
+
+api.post('/config', async (c) => {
+  const body = await c.req.json()
+  const updated = await saveConfig(body)
+  return c.json({ success: true })
+})
+
+api.post('/config/openrouter', async (c) => {
+  const { apiKey, model } = await c.req.json()
+  const config = await getConfig()
+  await saveConfig({
+    openrouter: {
+      apiKey: apiKey ?? config.openrouter.apiKey,
+      model: model ?? config.openrouter.model
+    }
+  })
+  return c.json({ success: true })
+})
+
+// ============== Legacy Routes ==============
+
+api.get('/integrations/github/activity', async (c) => {
+  const { since } = c.req.query()
+  const queryString = since ? `?since=${since}` : ''
+  return c.redirect(`/api/github/activity${queryString}`)
+})
+
+api.get('/integrations/jira/activity', async (c) => {
+  return c.json({ tickets: [] })
+})
+
+api.post('/entries/manual', async (c) => {
+  const body = await c.req.json()
+  return c.json({
+    id: crypto.randomUUID(),
+    ...body,
+    createdAt: new Date().toISOString(),
+  })
+})
+
+app.route('/api', api)
+
+// Start server
+const port = parseInt(process.env.PORT || '3001')
+console.log(`Werkday server starting on port ${port}`)
+
+export default {
+  port,
+  fetch: app.fetch,
+}

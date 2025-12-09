@@ -1,0 +1,311 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  
+  /* Custom Werkday colors */
+  --color-violet-primary: var(--violet-primary);
+  --color-violet-secondary: var(--violet-secondary);
+  --color-violet-muted: var(--violet-muted);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+}
+
+/* Dark theme by default - matching the dashboard screenshot */
+:root {
+  --radius: 0.75rem;
+  
+  /* Deep dark background with slight purple tint */
+  --background: #0d0b14;
+  --foreground: #f4f4f5;
+  
+  /* Card surfaces */
+  --card: #1a1625;
+  --card-foreground: #f4f4f5;
+  
+  /* Elevated surfaces */
+  --surface: #1a1625;
+  --surface-raised: #252136;
+  
+  --popover: #1a1625;
+  --popover-foreground: #f4f4f5;
+  
+  /* Primary - Violet/Purple */
+  --primary: #8b5cf6;
+  --primary-foreground: #ffffff;
+  
+  /* Secondary */
+  --secondary: #252136;
+  --secondary-foreground: #f4f4f5;
+  
+  /* Muted */
+  --muted: #252136;
+  --muted-foreground: #a1a1aa;
+  
+  /* Accent - lighter violet */
+  --accent: #7c3aed;
+  --accent-foreground: #ffffff;
+  
+  /* Destructive */
+  --destructive: #ef4444;
+  
+  /* Borders */
+  --border: rgba(139, 92, 246, 0.15);
+  --input: rgba(139, 92, 246, 0.2);
+  --ring: #8b5cf6;
+  
+  /* Chart colors - purple palette */
+  --chart-1: #8b5cf6;
+  --chart-2: #a78bfa;
+  --chart-3: #c4b5fd;
+  --chart-4: #7c3aed;
+  --chart-5: #6d28d9;
+  
+  /* Sidebar */
+  --sidebar: #13101c;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #8b5cf6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #252136;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: rgba(139, 92, 246, 0.1);
+  --sidebar-ring: #8b5cf6;
+  
+  /* Custom violet shades */
+  --violet-primary: #8b5cf6;
+  --violet-secondary: #a78bfa;
+  --violet-muted: rgba(139, 92, 246, 0.3);
+}
+
+/* Light theme */
+.light {
+  --radius: 0.75rem;
+  
+  /* Light background */
+  --background: #f8f7fc;
+  --foreground: #1a1625;
+  
+  /* Card surfaces */
+  --card: #ffffff;
+  --card-foreground: #1a1625;
+  
+  /* Elevated surfaces */
+  --surface: #ffffff;
+  --surface-raised: #f3f1f9;
+  
+  --popover: #ffffff;
+  --popover-foreground: #1a1625;
+  
+  /* Primary - Violet/Purple */
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  
+  /* Secondary */
+  --secondary: #f3f1f9;
+  --secondary-foreground: #1a1625;
+  
+  /* Muted */
+  --muted: #f3f1f9;
+  --muted-foreground: #6b7280;
+  
+  /* Accent - lighter violet */
+  --accent: #8b5cf6;
+  --accent-foreground: #ffffff;
+  
+  /* Destructive */
+  --destructive: #ef4444;
+  
+  /* Borders */
+  --border: rgba(139, 92, 246, 0.2);
+  --input: rgba(139, 92, 246, 0.25);
+  --ring: #7c3aed;
+  
+  /* Chart colors - purple palette */
+  --chart-1: #7c3aed;
+  --chart-2: #8b5cf6;
+  --chart-3: #a78bfa;
+  --chart-4: #6d28d9;
+  --chart-5: #5b21b6;
+  
+  /* Sidebar */
+  --sidebar: #f3f1f9;
+  --sidebar-foreground: #1a1625;
+  --sidebar-primary: #7c3aed;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ebe8f4;
+  --sidebar-accent-foreground: #1a1625;
+  --sidebar-border: rgba(139, 92, 246, 0.15);
+  --sidebar-ring: #7c3aed;
+  
+  /* Custom violet shades */
+  --violet-primary: #7c3aed;
+  --violet-secondary: #8b5cf6;
+  --violet-muted: rgba(139, 92, 246, 0.2);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer utilities {
+  /* Glassmorphism effects - dark mode */
+  .glass {
+    background: rgba(26, 22, 37, 0.6);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(139, 92, 246, 0.1);
+  }
+  
+  .glass-subtle {
+    background: rgba(26, 22, 37, 0.4);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Glassmorphism effects - light mode */
+  .light .glass {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(139, 92, 246, 0.15);
+  }
+  
+  .light .glass-subtle {
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(8px);
+  }
+  
+  /* Gradient backgrounds */
+  .gradient-primary {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  }
+  
+  /* Gradient card - dark mode */
+  .gradient-card {
+    background: linear-gradient(180deg, #252136 0%, #1a1625 100%);
+  }
+
+  /* Gradient card - light mode */
+  .light .gradient-card {
+    background: linear-gradient(180deg, #ffffff 0%, #f8f7fc 100%);
+  }
+  
+  .gradient-glow {
+    background: linear-gradient(135deg, 
+      rgba(139, 92, 246, 0.2) 0%, 
+      rgba(124, 58, 237, 0.1) 50%,
+      rgba(109, 40, 217, 0.05) 100%
+    );
+  }
+  
+  /* Hero gradient - dark mode */
+  .gradient-hero {
+    background: linear-gradient(135deg, 
+      #1a1625 0%,
+      #2d1f4e 50%,
+      #1a1625 100%
+    );
+  }
+
+  /* Hero gradient - light mode */
+  .light .gradient-hero {
+    background: linear-gradient(135deg, 
+      #f3f1f9 0%,
+      #e9e4f5 50%,
+      #f3f1f9 100%
+    );
+  }
+  
+  /* Stat card glow effect */
+  .card-glow {
+    box-shadow: 0 0 40px rgba(139, 92, 246, 0.1);
+  }
+  
+  .card-glow-hover:hover {
+    box-shadow: 0 0 60px rgba(139, 92, 246, 0.15);
+  }
+
+  /* Light mode shadows */
+  .light .card-glow {
+    box-shadow: 0 4px 24px rgba(139, 92, 246, 0.08);
+  }
+  
+  .light .card-glow-hover:hover {
+    box-shadow: 0 8px 32px rgba(139, 92, 246, 0.12);
+  }
+  
+  /* Text gradient */
+  .text-gradient {
+    background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Scrollbar styling - dark mode */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.3);
+    border-radius: 3px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.5);
+  }
+
+  /* Scrollbar styling - light mode */
+  .light .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.25);
+  }
+  
+  .light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.4);
+  }
+}
