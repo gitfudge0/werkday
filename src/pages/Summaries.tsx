@@ -16,52 +16,14 @@ import {
   StickyNote,
   CalendarIcon,
   Clock,
-  TrendingUp
+  TrendingUp,
+  CheckCircle2,
+  ArrowRight,
+  RefreshCw
 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-
-// Markdown to HTML converter for AI reports with professional styling
-function formatMarkdown(text: string): string {
-  // Split into sections by headers
-  const sections = text.split(/\*\*([^*]+)\*\*/).filter(Boolean)
-  
-  let html = ''
-  for (let i = 0; i < sections.length; i++) {
-    const section = sections[i].trim()
-    
-    // Check if this is a header (Executive Summary, Highlights, Next Steps)
-    if (section === 'Executive Summary' || section === 'Highlights' || section === 'Next Steps') {
-      html += `<h4 class="text-sm font-semibold text-foreground mt-4 mb-2 first:mt-0">${section}</h4>`
-    } else if (section) {
-      // Process content
-      const lines = section.split('\n').filter(line => line.trim())
-      
-      // Check if this section has bullet points
-      const hasBullets = lines.some(line => line.trim().startsWith('•') || line.trim().startsWith('-'))
-      
-      if (hasBullets) {
-        html += '<ul class="space-y-1.5 mb-3">'
-        for (const line of lines) {
-          const content = line.trim().replace(/^[•\-]\s*/, '')
-          if (content) {
-            html += `<li class="text-sm text-muted-foreground flex gap-2"><span class="text-primary">•</span><span>${content}</span></li>`
-          }
-        }
-        html += '</ul>'
-      } else {
-        // Regular paragraph
-        const content = lines.join(' ').trim()
-        if (content) {
-          html += `<p class="text-sm text-muted-foreground mb-3 leading-relaxed">${content}</p>`
-        }
-      }
-    }
-  }
-  
-  return html
-}
 
 interface GitHubActivity {
   id: string
@@ -118,6 +80,11 @@ interface DailySummary {
     items: Note[]
   }
   aiReport: string | null
+  aiReportStructured: {
+    executiveSummary: string
+    highlights: string[]
+    nextSteps: string[]
+  } | null
 }
 
 export function Summaries() {
@@ -126,9 +93,11 @@ export function Summaries() {
     to: new Date()
   })
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
+  const [isSelectingRange, setIsSelectingRange] = useState(false)
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasOpenRouter, setHasOpenRouter] = useState(false)
 
@@ -249,11 +218,60 @@ export function Summaries() {
     }
   }
 
+  const syncData = async () => {
+    if (!dateRange?.from) return
+    
+    setIsSyncing(true)
+    setError(null)
+    try {
+      const fromDate = formatDateForApi(dateRange.from)
+      const toDate = dateRange.to ? formatDateForApi(dateRange.to) : fromDate
+      
+      // Sync GitHub and JIRA in parallel
+      const [githubRes, jiraRes] = await Promise.all([
+        fetch(`http://localhost:3001/api/github/activity?since=${fromDate}T00:00:00&cache=false`),
+        fetch('http://localhost:3001/api/jira/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: fromDate, to: toDate })
+        })
+      ])
+      
+      if (!githubRes.ok || !jiraRes.ok) {
+        const errors = []
+        if (!githubRes.ok) errors.push('GitHub')
+        if (!jiraRes.ok) errors.push('JIRA')
+        setError(`Failed to sync: ${errors.join(', ')}`)
+      } else {
+        // Refresh the summary after syncing
+        await fetchSummary()
+      }
+    } catch {
+      setError('Failed to sync data')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
   const handleDateSelect = (range: DateRange | undefined) => {
     setDateRange(range)
-    // Close popover when both dates are selected
-    if (range?.from && range?.to) {
+    
+    // Track if we're in the middle of selecting a range
+    if (!isSelectingRange && range?.from) {
+      // First click - start selecting
+      setIsSelectingRange(true)
+    } else if (isSelectingRange && range?.from && range?.to) {
+      // Second click - range complete, close popover
+      setIsSelectingRange(false)
       setIsCalendarOpen(false)
+    }
+  }
+
+  // Reset selecting state when calendar opens
+  const handleCalendarOpenChange = (open: boolean) => {
+    setIsCalendarOpen(open)
+    if (open) {
+      setIsSelectingRange(false)
     }
   }
 
@@ -318,22 +336,8 @@ export function Summaries() {
         </div>
         
         <div className="flex items-center gap-3">
-          {/* Generate Button */}
-          <button
-            onClick={generateSummary}
-            disabled={isGenerating}
-            className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
-          >
-            {isGenerating ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Sparkles size={16} />
-            )}
-            {isGenerating ? 'Generating...' : summary?.generatedAt ? 'Regenerate' : 'Generate Report'}
-          </button>
-
           {/* Date Range Picker */}
-          <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+          <Popover open={isCalendarOpen} onOpenChange={handleCalendarOpenChange}>
             <PopoverTrigger asChild>
               <button className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50">
                 <CalendarIcon size={16} className="text-muted-foreground" />
@@ -362,6 +366,7 @@ export function Summaries() {
                     onClick={() => {
                       const today = new Date()
                       setDateRange({ from: today, to: today })
+                      setIsSelectingRange(false)
                       setIsCalendarOpen(false)
                     }}
                     className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
@@ -373,6 +378,7 @@ export function Summaries() {
                       const today = new Date()
                       const weekAgo = addDays(today, -6)
                       setDateRange({ from: weekAgo, to: today })
+                      setIsSelectingRange(false)
                       setIsCalendarOpen(false)
                     }}
                     className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
@@ -384,6 +390,7 @@ export function Summaries() {
                       const today = new Date()
                       const monthAgo = addDays(today, -29)
                       setDateRange({ from: monthAgo, to: today })
+                      setIsSelectingRange(false)
                       setIsCalendarOpen(false)
                     }}
                     className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-raised hover:text-foreground"
@@ -494,11 +501,67 @@ export function Summaries() {
                       )}
                     </div>
                   </div>
+                  <button
+                    onClick={generateSummary}
+                    disabled={isGenerating || isSyncing || totalActivity === 0 || !hasOpenRouter}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={summary?.generatedAt ? 'Regenerate Report' : 'Generate Report'}
+                  >
+                    {isGenerating ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={18} />
+                    )}
+                  </button>
                 </div>
 
                 <div className="p-5">
-                  {summary?.aiReport ? (
-                    <div dangerouslySetInnerHTML={{ __html: formatMarkdown(summary.aiReport) }} />
+                  {summary?.aiReportStructured ? (
+                    <div className="space-y-6">
+                      {/* Executive Summary */}
+                      <div className="flex gap-4">
+                        <div className="w-32 shrink-0">
+                          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Summary</span>
+                        </div>
+                        <p className="text-sm text-foreground leading-relaxed">
+                          {summary.aiReportStructured.executiveSummary}
+                        </p>
+                      </div>
+
+                      {/* Highlights */}
+                      {summary.aiReportStructured.highlights.length > 0 && (
+                        <div className="flex gap-4">
+                          <div className="w-32 shrink-0">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Highlights</span>
+                          </div>
+                          <ul className="space-y-2 flex-1">
+                            {summary.aiReportStructured.highlights.map((highlight, index) => (
+                              <li key={index} className="flex items-start gap-2 text-sm text-foreground">
+                                <CheckCircle2 size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                                <span>{highlight}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Next Steps */}
+                      {summary.aiReportStructured.nextSteps.length > 0 && (
+                        <div className="flex gap-4">
+                          <div className="w-32 shrink-0">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Next Steps</span>
+                          </div>
+                          <ul className="space-y-2 flex-1">
+                            {summary.aiReportStructured.nextSteps.map((step, index) => (
+                              <li key={index} className="flex items-start gap-2 text-sm text-muted-foreground">
+                                <ArrowRight size={16} className="text-violet-400 shrink-0 mt-0.5" />
+                                <span>{step}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   ) : totalActivity === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <FileText size={32} className="mb-4 text-muted-foreground" />
@@ -520,7 +583,7 @@ export function Summaries() {
                         {totalActivity} activities found
                       </p>
                       <p className="text-xs text-muted-foreground mb-4">
-                        Click "Generate Report" to create an AI-powered summary.
+                        Click the sparkle icon above to generate an AI-powered summary.
                       </p>
                     </div>
                   )}
@@ -531,11 +594,23 @@ export function Summaries() {
             {/* Activity Timeline - Sidebar */}
             <div className="space-y-4">
               <div className="rounded-2xl border border-border bg-card">
-                <div className="border-b border-border p-4">
+                <div className="flex items-center justify-between border-b border-border p-4">
                   <div className="flex items-center gap-2">
                     <Clock size={16} className="text-muted-foreground" />
                     <h3 className="font-semibold text-foreground">Activity Timeline</h3>
                   </div>
+                  <button
+                    onClick={syncData}
+                    disabled={isSyncing}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-50"
+                    title="Sync GitHub & JIRA"
+                  >
+                    {isSyncing ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={18} />
+                    )}
+                  </button>
                 </div>
 
                 {allActivities.length === 0 ? (

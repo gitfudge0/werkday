@@ -653,16 +653,16 @@ api.post('/jira/sync', async (c) => {
       const issuesWithUserActivity = new Set<string>()
 
       for (const issue of searchResult.issues || []) {
-        let hasUserActivity = false
+        let hasActivity = false
 
-        // Check changelog for changes made by the user on the target date
+        // Check changelog for status changes on the target date (any user)
         if (issue.changelog?.histories) {
           for (const history of issue.changelog.histories) {
             const historyDate = new Date(history.created).toISOString().split('T')[0]
-            if (historyDate === date && history.author?.accountId === accountId) {
-              hasUserActivity = true
+            if (historyDate === date) {
               for (const item of history.items || []) {
                 if (item.field === 'status') {
+                  hasActivity = true
                   dayActivities.push({
                     id: `transition-${issue.id}-${history.id}`,
                     type: 'transition',
@@ -683,12 +683,12 @@ api.post('/jira/sync', async (c) => {
           }
         }
 
-        // Check comments made by the user on the target date
+        // Check comments on the target date (any user)
         if (issue.fields.comment?.comments) {
           for (const comment of issue.fields.comment.comments) {
             const commentDate = new Date(comment.created).toISOString().split('T')[0]
-            if (commentDate === date && comment.author?.accountId === accountId) {
-              hasUserActivity = true
+            if (commentDate === date) {
+              hasActivity = true
               const commentText = extractTextFromADF(comment.body)
               dayActivities.push({
                 id: `comment-${issue.id}-${comment.id}`,
@@ -707,12 +707,12 @@ api.post('/jira/sync', async (c) => {
           }
         }
 
-        // Check worklogs added by the user on the target date
+        // Check worklogs on the target date (any user)
         if (issue.fields.worklog?.worklogs) {
           for (const worklog of issue.fields.worklog.worklogs) {
             const worklogDate = new Date(worklog.started).toISOString().split('T')[0]
-            if (worklogDate === date && worklog.author?.accountId === accountId) {
-              hasUserActivity = true
+            if (worklogDate === date) {
+              hasActivity = true
               dayActivities.push({
                 id: `worklog-${issue.id}-${worklog.id}`,
                 type: 'worklog',
@@ -732,8 +732,8 @@ api.post('/jira/sync', async (c) => {
           }
         }
 
-        // Add the issue itself if user had any activity on it
-        if (hasUserActivity) {
+        // Add the issue itself if there was any activity on it
+        if (hasActivity) {
           issuesWithUserActivity.add(issue.key)
           dayActivities.push({
             id: `issue-${issue.id}`,
@@ -827,6 +827,104 @@ api.get('/jira/cache', async (c) => {
 })
 
 // ============== Summary Routes ==============
+
+// Get historical activity data for charts (aggregated by day)
+api.get('/summary/history', async (c) => {
+  const days = parseInt(c.req.query('days') || '7')
+  const endDate = new Date()
+  const startDate = new Date()
+  startDate.setDate(startDate.getDate() - days + 1)
+
+  const history: Array<{
+    date: string
+    github: number
+    jira: number
+    notes: number
+    total: number
+    details: {
+      commits: number
+      pullRequests: number
+      reviews: number
+      issues: number
+      transitions: number
+      comments: number
+      worklogs: number
+      timeLogged: string | null
+    }
+  }> = []
+
+  // Get GitHub cache once
+  const githubCache = await getGitHubCache()
+  const allNotes = await getNotes()
+
+  // Iterate through each day
+  const current = new Date(startDate)
+  while (current <= endDate) {
+    const dateStr = current.toISOString().split('T')[0]
+    
+    // GitHub activities for this day
+    const dayStart = new Date(dateStr)
+    dayStart.setHours(0, 0, 0, 0)
+    const dayEnd = new Date(dateStr)
+    dayEnd.setHours(23, 59, 59, 999)
+    
+    const dayGithubActivities = githubCache.activities.filter(a => {
+      const actDate = new Date(a.date)
+      return actDate >= dayStart && actDate <= dayEnd
+    })
+    const commits = dayGithubActivities.filter(a => a.type === 'commit').length
+    const pullRequests = dayGithubActivities.filter(a => a.type === 'pr').length
+    const reviews = dayGithubActivities.filter(a => a.type === 'review').length
+
+    // JIRA activities for this day
+    const jiraData = await getJiraDailyData(dateStr)
+    const jiraActivities = jiraData?.activities || []
+    const issues = jiraActivities.filter(a => a.type === 'issue').length
+    const transitions = jiraActivities.filter(a => a.type === 'transition').length
+    const jiraComments = jiraActivities.filter(a => a.type === 'comment').length
+    const worklogs = jiraActivities.filter(a => a.type === 'worklog').length
+    const totalTimeSeconds = jiraActivities
+      .filter(a => a.type === 'worklog')
+      .reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+    const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
+
+    // Notes for this day
+    const dayNotes = allNotes.filter(n => {
+      const noteDate = new Date(n.updatedAt).toISOString().split('T')[0]
+      return noteDate === dateStr
+    }).length
+
+    const githubTotal = commits + pullRequests + reviews
+    const jiraTotal = issues + transitions + jiraComments + worklogs
+
+    history.push({
+      date: dateStr,
+      github: githubTotal,
+      jira: jiraTotal,
+      notes: dayNotes,
+      total: githubTotal + jiraTotal + dayNotes,
+      details: {
+        commits,
+        pullRequests,
+        reviews,
+        issues,
+        transitions,
+        comments: jiraComments,
+        worklogs,
+        timeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null
+      }
+    })
+
+    current.setDate(current.getDate() + 1)
+  }
+
+  return c.json({
+    days,
+    from: startDate.toISOString().split('T')[0],
+    to: endDate.toISOString().split('T')[0],
+    history
+  })
+})
 
 api.get('/summary/daily', async (c) => {
   const fromDate = c.req.query('from') || c.req.query('date') || new Date().toISOString().split('T')[0]
@@ -977,36 +1075,31 @@ api.post('/summary/generate', async (c) => {
     jiraIssues.length + jiraTransitions.length + jiraComments.length + jiraWorklogs.length +
     rangeNotes.length
 
+  // Structured AI report
+  let aiReportStructured: {
+    executiveSummary: string
+    highlights: string[]
+    nextSteps: string[]
+  } | null = null
+
   if (config.openrouter.apiKey && totalActivity > 0) {
     try {
-      const dateLabel = isRange ? `${fromDate} to ${toDate} (${dates.length} days)` : fromDate
-      
-      const prompt = `You are writing a professional work summary. Based on the activity data below, generate a concise report.
+      const prompt = `You are a JSON generator. Based on this developer's work activity, generate a structured summary.
 
-Activity Data:
+Activity:
 - ${commits.length} commits: ${commits.slice(0, 5).map(c => c.title).join(', ') || 'none'}
-- ${prs.length} pull requests
-- ${reviews.length} code reviews
+- ${prs.length} pull requests, ${reviews.length} code reviews
 - ${jiraIssues.length} JIRA issues: ${jiraIssues.slice(0, 3).map(i => `${i.issueKey} ${i.issueSummary}`).join(', ') || 'none'}
-- ${jiraTransitions.length} status transitions
-- ${totalTimeHours > 0 ? `${totalTimeHours}h time logged` : 'no time logged'}
-- ${rangeNotes.length} notes updated
+- ${jiraTransitions.length} status changes${totalTimeHours > 0 ? `, ${totalTimeHours}h logged` : ''}
+- ${rangeNotes.length} notes
 
-Generate ONLY these three sections (no date header, no metrics list):
+Respond with ONLY a JSON object, no other text before or after:
+{"executiveSummary": "2-3 sentences summarizing accomplishments", "highlights": ["accomplishment 1", "accomplishment 2", "accomplishment 3"], "nextSteps": ["next step 1", "next step 2"]}
 
-**Executive Summary**
-Write 2-3 sentences describing what was accomplished and the overall focus of the work.
-
-**Highlights**
-• List ${isRange ? '4-5' : '3-4'} specific accomplishments as bullet points
-• Focus on impact and what was delivered, not raw numbers
-• Be specific about features, fixes, or improvements made
-
-**Next Steps**
-• List 2-3 logical follow-up tasks or recommendations
-• Base these on the work that was done
-
-Use bullet points (•) not dashes. Keep it professional and suitable for sharing with stakeholders.`
+Requirements:
+- executiveSummary: Brief professional overview of work done
+- highlights: ${isRange ? '4-5' : '3-4'} specific accomplishments (NOT metrics like "5 commits")
+- nextSteps: 2-3 logical follow-up tasks based on the work done`
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -1017,13 +1110,34 @@ Use bullet points (•) not dashes. Keep it professional and suitable for sharin
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: isRange ? 450 : 350,
+          max_tokens: isRange ? 500 : 400
         })
       })
 
       if (response.ok) {
         const data = await response.json()
-        aiReport = data.choices?.[0]?.message?.content || null
+        const content = data.choices?.[0]?.message?.content
+        if (content) {
+          try {
+            // Clean up any markdown code blocks or extra text
+            let cleanJson = content.trim()
+            // Remove markdown code blocks
+            cleanJson = cleanJson.replace(/```json\n?/g, '').replace(/```\n?/g, '')
+            // Try to extract JSON object if there's extra text
+            const jsonMatch = cleanJson.match(/\{[\s\S]*\}/)
+            if (jsonMatch) {
+              cleanJson = jsonMatch[0]
+            }
+            aiReportStructured = JSON.parse(cleanJson)
+            console.log('[AI Report] Successfully parsed structured report')
+          } catch (e) {
+            console.error('[AI Report] Failed to parse JSON response:', e)
+            console.error('[AI Report] Raw content:', content.substring(0, 500))
+          }
+        }
+      } else {
+        const errorData = await response.json().catch(() => ({}))
+        console.error('[AI Report] API error:', response.status, errorData)
       }
     } catch (error) {
       console.error('Failed to generate AI report:', error)
@@ -1054,6 +1168,7 @@ Use bullet points (•) not dashes. Keep it professional and suitable for sharin
       items: rangeNotes
     },
     aiReport,
+    aiReportStructured,
     // Legacy fields for backwards compatibility
     commits: commits.length,
     pullRequests: prs.length,
