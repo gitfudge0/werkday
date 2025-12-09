@@ -256,11 +256,16 @@ export interface JiraActivity {
   project: string
   date: string
   url: string
+  author?: string
   details?: {
     fromStatus?: string
     toStatus?: string
     timeSpent?: string
+    timeSpentSeconds?: number
     commentBody?: string
+    field?: string
+    fromValue?: string
+    toValue?: string
   }
 }
 

@@ -11,7 +11,9 @@ import {
   Loader2,
   Clock,
   ArrowRight,
-  CalendarIcon
+  CalendarIcon,
+  MessageSquare,
+  Timer
 } from 'lucide-react'
 import { formatDistanceToNow } from '../lib/utils'
 import { Calendar } from '../components/ui/calendar'
@@ -25,11 +27,14 @@ interface JiraActivity {
   project: string
   date: string
   url: string
+  author?: string
   details?: {
     fromStatus?: string
     toStatus?: string
     comment?: string
     timeSpent?: string
+    timeSpentSeconds?: number
+    commentBody?: string
   }
 }
 
@@ -37,9 +42,14 @@ interface ActivityResponse {
   date: string
   issues: JiraActivity[]
   transitions: JiraActivity[]
+  comments: JiraActivity[]
+  worklogs: JiraActivity[]
   summary: {
     issuesWorkedOn: number
     transitionsMade: number
+    commentsMade: number
+    worklogsAdded: number
+    totalTimeLogged: string | null
   }
 }
 
@@ -52,7 +62,13 @@ export function JIRA() {
   const [displayName, setDisplayName] = useState<string | null>(null)
   const [domain, setDomain] = useState<string | null>(null)
   const [activities, setActivities] = useState<JiraActivity[]>([])
-  const [stats, setStats] = useState({ issuesWorkedOn: 0, transitionsMade: 0 })
+  const [stats, setStats] = useState({ 
+    issuesWorkedOn: 0, 
+    transitionsMade: 0,
+    commentsMade: 0,
+    worklogsAdded: 0,
+    totalTimeLogged: null as string | null
+  })
   const [error, setError] = useState<string | null>(null)
 
   // Format date for API (YYYY-MM-DD)
@@ -97,18 +113,20 @@ export function JIRA() {
       // Combine all activities and sort by date
       const allActivities: JiraActivity[] = [
         ...data.issues,
-        ...data.transitions
+        ...data.transitions,
+        ...data.comments,
+        ...data.worklogs
       ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       
-      // Remove duplicate issues (keep transitions if they exist for the same issue)
+      // Remove duplicate issues (keep other activity types if they exist for the same issue)
       const seen = new Set<string>()
       const deduped = allActivities.filter(activity => {
-        // Always keep transitions
-        if (activity.type === 'transition') {
+        // Always keep transitions, comments, worklogs
+        if (activity.type !== 'issue') {
           seen.add(activity.issueKey)
           return true
         }
-        // Only keep issues if we haven't seen a transition for it
+        // Only keep issues if we haven't seen any other activity for it
         if (!seen.has(activity.issueKey)) {
           seen.add(activity.issueKey)
           return true
@@ -173,9 +191,9 @@ export function JIRA() {
       case 'transition':
         return <ArrowRightLeft size={16} className="text-violet-400" />
       case 'comment':
-        return <Ticket size={16} className="text-amber-400" />
+        return <MessageSquare size={16} className="text-amber-400" />
       case 'worklog':
-        return <Clock size={16} className="text-emerald-400" />
+        return <Timer size={16} className="text-emerald-400" />
       default:
         return <AlertCircle size={16} className="text-muted-foreground" />
     }
@@ -193,6 +211,29 @@ export function JIRA() {
             <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-400">
               {activity.details?.toStatus}
             </span>
+          </span>
+        )
+      case 'comment':
+        return (
+          <span className="text-xs text-muted-foreground">
+            {activity.details?.commentBody ? (
+              <span className="line-clamp-2 italic">"{activity.details.commentBody}"</span>
+            ) : (
+              'Added a comment'
+            )}
+          </span>
+        )
+      case 'worklog':
+        return (
+          <span className="flex items-center gap-1.5 text-xs">
+            <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-400">
+              {activity.details?.timeSpent || 'Time logged'}
+            </span>
+            {activity.details?.commentBody && (
+              <span className="text-muted-foreground truncate max-w-[200px]">
+                - {activity.details.commentBody}
+              </span>
+            )}
           </span>
         )
       case 'issue':
@@ -301,7 +342,7 @@ export function JIRA() {
       )}
 
       {/* Stats Cards */}
-      <div className="mb-6 grid gap-4 md:grid-cols-2">
+      <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
@@ -322,6 +363,32 @@ export function JIRA() {
             <div>
               <p className="text-2xl font-bold text-foreground">{stats.transitionsMade}</p>
               <p className="text-xs text-muted-foreground">Status Transitions</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
+              <MessageSquare size={20} className="text-amber-400" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">{stats.commentsMade}</p>
+              <p className="text-xs text-muted-foreground">Comments Made</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+              <Timer size={20} className="text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">
+                {stats.totalTimeLogged || '0h'}
+              </p>
+              <p className="text-xs text-muted-foreground">Time Logged</p>
             </div>
           </div>
         </div>

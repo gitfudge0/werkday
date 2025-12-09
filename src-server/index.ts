@@ -470,6 +470,23 @@ api.get('/jira/projects', async (c) => {
   }
 })
 
+// Helper to extract plain text from Atlassian Document Format (ADF)
+function extractTextFromADF(adf: any): string {
+  if (!adf || !adf.content) return ''
+  
+  const extractFromNode = (node: any): string => {
+    if (node.type === 'text') {
+      return node.text || ''
+    }
+    if (node.content && Array.isArray(node.content)) {
+      return node.content.map(extractFromNode).join('')
+    }
+    return ''
+  }
+  
+  return adf.content.map(extractFromNode).join('\n').trim()
+}
+
 // Get JIRA activity for a date
 api.get('/jira/activity', async (c) => {
   const config = await getConfig()
@@ -499,6 +516,7 @@ api.get('/jira/activity', async (c) => {
     jql += ' ORDER BY updated DESC'
 
     // Search for issues updated on the specified date (using new /search/jql API)
+    // Include comment and worklog fields
     const searchResult = await jiraFetch(
       `/search/jql`,
       domain,
@@ -508,7 +526,7 @@ api.get('/jira/activity', async (c) => {
       {
         jql,
         maxResults: 50,
-        fields: ['summary', 'status', 'project', 'updated', 'created'],
+        fields: ['summary', 'status', 'project', 'updated', 'created', 'comment', 'worklog'],
         expand: 'changelog'
       }
     )
@@ -528,7 +546,7 @@ api.get('/jira/activity', async (c) => {
         url: `${baseUrl}/browse/${issue.key}`,
       })
 
-      // Check changelog for status transitions on the target date
+      // Check changelog for status transitions and other field changes on the target date
       if (issue.changelog?.histories) {
         for (const history of issue.changelog.histories) {
           const historyDate = new Date(history.created).toISOString().split('T')[0]
@@ -543,6 +561,7 @@ api.get('/jira/activity', async (c) => {
                   project: issue.fields.project.key,
                   date: history.created,
                   url: `${baseUrl}/browse/${issue.key}`,
+                  author: history.author?.displayName,
                   details: {
                     fromStatus: item.fromString,
                     toStatus: item.toString,
@@ -550,6 +569,53 @@ api.get('/jira/activity', async (c) => {
                 })
               }
             }
+          }
+        }
+      }
+
+      // Check comments made by the user on the target date
+      if (issue.fields.comment?.comments) {
+        for (const comment of issue.fields.comment.comments) {
+          const commentDate = new Date(comment.created).toISOString().split('T')[0]
+          if (commentDate === date && comment.author?.accountId === accountId) {
+            const commentText = extractTextFromADF(comment.body)
+            activities.push({
+              id: `comment-${issue.id}-${comment.id}`,
+              type: 'comment',
+              issueKey: issue.key,
+              issueSummary: issue.fields.summary,
+              project: issue.fields.project.key,
+              date: comment.created,
+              url: `${baseUrl}/browse/${issue.key}?focusedCommentId=${comment.id}`,
+              author: comment.author?.displayName,
+              details: {
+                commentBody: commentText.length > 200 ? commentText.substring(0, 200) + '...' : commentText,
+              },
+            })
+          }
+        }
+      }
+
+      // Check worklogs added by the user on the target date
+      if (issue.fields.worklog?.worklogs) {
+        for (const worklog of issue.fields.worklog.worklogs) {
+          const worklogDate = new Date(worklog.started).toISOString().split('T')[0]
+          if (worklogDate === date && worklog.author?.accountId === accountId) {
+            activities.push({
+              id: `worklog-${issue.id}-${worklog.id}`,
+              type: 'worklog',
+              issueKey: issue.key,
+              issueSummary: issue.fields.summary,
+              project: issue.fields.project.key,
+              date: worklog.started,
+              url: `${baseUrl}/browse/${issue.key}?focusedWorklogId=${worklog.id}`,
+              author: worklog.author?.displayName,
+              details: {
+                timeSpent: worklog.timeSpent,
+                timeSpentSeconds: worklog.timeSpentSeconds,
+                commentBody: worklog.comment ? extractTextFromADF(worklog.comment) : undefined,
+              },
+            })
           }
         }
       }
@@ -561,14 +627,25 @@ api.get('/jira/activity', async (c) => {
     // Group by type for summary
     const issues = activities.filter(a => a.type === 'issue')
     const transitions = activities.filter(a => a.type === 'transition')
+    const comments = activities.filter(a => a.type === 'comment')
+    const worklogs = activities.filter(a => a.type === 'worklog')
+
+    // Calculate total time logged
+    const totalTimeSeconds = worklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+    const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
 
     return c.json({
       date,
       issues,
       transitions,
+      comments,
+      worklogs,
       summary: {
         issuesWorkedOn: new Set(activities.map(a => a.issueKey)).size,
         transitionsMade: transitions.length,
+        commentsMade: comments.length,
+        worklogsAdded: worklogs.length,
+        totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
       },
     })
   } catch (error) {
