@@ -11,8 +11,11 @@ import {
   getNotes,
   saveNote,
   deleteNote,
+  getJiraCache,
+  addJiraActivities,
   type AppConfig,
   type GitHubActivity,
+  type JiraActivity,
 } from './storage'
 
 const app = new Hono()
@@ -31,6 +34,34 @@ const githubFetch = async (endpoint: string, token: string) => {
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
     throw new Error(error.message || `GitHub API error: ${response.status}`)
+  }
+  
+  return response.json()
+}
+
+// JIRA API helper
+const jiraFetch = async (
+  endpoint: string,
+  domain: string,
+  email: string,
+  apiToken: string,
+  method: string = 'GET',
+  body?: any
+) => {
+  const auth = Buffer.from(`${email}:${apiToken}`).toString('base64')
+  const response = await fetch(`https://${domain}.atlassian.net/rest/api/3${endpoint}`, {
+    method,
+    headers: {
+      'Authorization': `Basic ${auth}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || error.errorMessages?.[0] || `JIRA API error: ${response.status}`)
   }
   
   return response.json()
@@ -313,6 +344,245 @@ api.get('/github/cache', async (c) => {
   return c.json(cache)
 })
 
+// ============== JIRA Routes ==============
+
+// Check JIRA connection status
+api.get('/jira/status', async (c) => {
+  const config = await getConfig()
+  const hasValidToken = !!config.jira.apiToken && config.jira.apiToken !== '***'
+  return c.json({
+    connected: hasValidToken && !!config.jira.domain,
+    displayName: config.jira.displayName,
+    domain: config.jira.domain,
+  })
+})
+
+// Get saved JIRA config (without exposing token)
+api.get('/jira/config', async (c) => {
+  const config = await getConfig()
+  const hasValidToken = !!config.jira.apiToken && config.jira.apiToken !== '***'
+  return c.json({
+    domain: config.jira.domain,
+    email: config.jira.email,
+    apiToken: hasValidToken ? '***' : null,
+    displayName: config.jira.displayName,
+    projects: config.jira.projects,
+  })
+})
+
+// Save JIRA config
+api.post('/jira/config', async (c) => {
+  const body = await c.req.json()
+  const config = await getConfig()
+  
+  // Don't save masked token values
+  const newToken = (body.apiToken && body.apiToken !== '***') ? body.apiToken : config.jira.apiToken
+  
+  await saveConfig({
+    jira: {
+      ...config.jira,
+      domain: body.domain ?? config.jira.domain,
+      email: body.email ?? config.jira.email,
+      apiToken: newToken,
+      projects: body.projects ?? config.jira.projects,
+    }
+  })
+  
+  return c.json({ success: true })
+})
+
+// Validate JIRA credentials
+api.post('/jira/validate', async (c) => {
+  const { domain, email, apiToken } = await c.req.json()
+  
+  if (!domain || !email || !apiToken) {
+    return c.json({ valid: false, error: 'All fields are required' }, 400)
+  }
+
+  try {
+    const user = await jiraFetch('/myself', domain, email, apiToken)
+    
+    // Save the credentials and user info
+    const config = await getConfig()
+    await saveConfig({
+      jira: {
+        ...config.jira,
+        domain,
+        email,
+        apiToken,
+        displayName: user.displayName,
+        accountId: user.accountId,
+      }
+    })
+    
+    return c.json({
+      valid: true,
+      displayName: user.displayName,
+      accountId: user.accountId,
+      emailAddress: user.emailAddress,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Validation failed'
+    return c.json({ valid: false, error: message }, 401)
+  }
+})
+
+// Disconnect JIRA
+api.post('/jira/disconnect', async (c) => {
+  await saveConfig({
+    jira: {
+      domain: null,
+      email: null,
+      apiToken: null,
+      displayName: null,
+      accountId: null,
+      projects: [],
+    }
+  })
+  return c.json({ success: true })
+})
+
+// Get JIRA projects
+api.get('/jira/projects', async (c) => {
+  const config = await getConfig()
+  
+  if (!config.jira.domain || !config.jira.email || !config.jira.apiToken) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  try {
+    const response = await jiraFetch(
+      '/project/search?maxResults=100&orderBy=name',
+      config.jira.domain,
+      config.jira.email,
+      config.jira.apiToken
+    )
+    
+    return c.json(response.values.map((project: any) => ({
+      id: project.id,
+      key: project.key,
+      name: project.name,
+      avatarUrls: project.avatarUrls,
+    })))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch projects'
+    return c.json({ error: message }, 500)
+  }
+})
+
+// Get JIRA activity for a date
+api.get('/jira/activity', async (c) => {
+  const config = await getConfig()
+  const date = c.req.query('date') || new Date().toISOString().split('T')[0]
+  
+  if (!config.jira.domain || !config.jira.email || !config.jira.apiToken || !config.jira.accountId) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  try {
+    const domain = config.jira.domain
+    const email = config.jira.email
+    const apiToken = config.jira.apiToken
+    const accountId = config.jira.accountId
+    const projects = config.jira.projects
+
+    // Calculate next day for date range query
+    const nextDay = new Date(date)
+    nextDay.setDate(nextDay.getDate() + 1)
+    const nextDayStr = nextDay.toISOString().split('T')[0]
+
+    // Build JQL query
+    let jql = `assignee = "${accountId}" AND updated >= "${date}" AND updated < "${nextDayStr}"`
+    if (projects.length > 0) {
+      jql += ` AND project IN (${projects.map(p => `"${p}"`).join(', ')})`
+    }
+    jql += ' ORDER BY updated DESC'
+
+    // Search for issues updated on the specified date (using new /search/jql API)
+    const searchResult = await jiraFetch(
+      `/search/jql`,
+      domain,
+      email,
+      apiToken,
+      'POST',
+      {
+        jql,
+        maxResults: 50,
+        fields: ['summary', 'status', 'project', 'updated', 'created'],
+        expand: 'changelog'
+      }
+    )
+
+    const activities: JiraActivity[] = []
+    const baseUrl = `https://${domain}.atlassian.net`
+
+    for (const issue of searchResult.issues || []) {
+      // Add the issue itself as an activity
+      activities.push({
+        id: `issue-${issue.id}`,
+        type: 'issue',
+        issueKey: issue.key,
+        issueSummary: issue.fields.summary,
+        project: issue.fields.project.key,
+        date: issue.fields.updated,
+        url: `${baseUrl}/browse/${issue.key}`,
+      })
+
+      // Check changelog for status transitions on the target date
+      if (issue.changelog?.histories) {
+        for (const history of issue.changelog.histories) {
+          const historyDate = new Date(history.created).toISOString().split('T')[0]
+          if (historyDate === date && history.author?.accountId === accountId) {
+            for (const item of history.items || []) {
+              if (item.field === 'status') {
+                activities.push({
+                  id: `transition-${issue.id}-${history.id}`,
+                  type: 'transition',
+                  issueKey: issue.key,
+                  issueSummary: issue.fields.summary,
+                  project: issue.fields.project.key,
+                  date: history.created,
+                  url: `${baseUrl}/browse/${issue.key}`,
+                  details: {
+                    fromStatus: item.fromString,
+                    toStatus: item.toString,
+                  },
+                })
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Cache the activities
+    await addJiraActivities(activities)
+
+    // Group by type for summary
+    const issues = activities.filter(a => a.type === 'issue')
+    const transitions = activities.filter(a => a.type === 'transition')
+
+    return c.json({
+      date,
+      issues,
+      transitions,
+      summary: {
+        issuesWorkedOn: new Set(activities.map(a => a.issueKey)).size,
+        transitionsMade: transitions.length,
+      },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch activity'
+    return c.json({ error: message }, 500)
+  }
+})
+
+// Get cached JIRA activity
+api.get('/jira/cache', async (c) => {
+  const cache = await getJiraCache()
+  return c.json(cache)
+})
+
 // ============== Summary Routes ==============
 
 api.get('/summary/daily', async (c) => {
@@ -493,7 +763,9 @@ api.get('/integrations/github/activity', async (c) => {
 })
 
 api.get('/integrations/jira/activity', async (c) => {
-  return c.json({ tickets: [] })
+  const { date } = c.req.query()
+  const queryString = date ? `?date=${date}` : ''
+  return c.redirect(`/api/jira/activity${queryString}`)
 })
 
 api.post('/entries/manual', async (c) => {

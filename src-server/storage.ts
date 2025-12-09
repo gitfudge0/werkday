@@ -17,6 +17,7 @@ async function ensureDataDir() {
 const FILES = {
   config: join(DATA_DIR, 'config.json'),
   githubCache: join(DATA_DIR, 'github-cache.json'),
+  jiraCache: join(DATA_DIR, 'jira-cache.json'),
   summaries: join(DATA_DIR, 'summaries.json'),
   notes: join(DATA_DIR, 'notes.json'),
 }
@@ -50,6 +51,14 @@ export interface AppConfig {
     organizations: string[]
     repositories: string[]
   }
+  jira: {
+    domain: string | null
+    email: string | null
+    apiToken: string | null
+    displayName: string | null
+    accountId: string | null
+    projects: string[]
+  }
   openrouter: {
     apiKey: string | null
     model: string
@@ -68,6 +77,14 @@ const DEFAULT_CONFIG: AppConfig = {
     organizations: [],
     repositories: [],
   },
+  jira: {
+    domain: null,
+    email: null,
+    apiToken: null,
+    displayName: null,
+    accountId: null,
+    projects: [],
+  },
   openrouter: {
     apiKey: null,
     model: 'anthropic/claude-haiku-4.5',
@@ -79,7 +96,14 @@ const DEFAULT_CONFIG: AppConfig = {
 }
 
 export async function getConfig(): Promise<AppConfig> {
-  return readJsonFile(FILES.config, DEFAULT_CONFIG)
+  const saved = await readJsonFile(FILES.config, DEFAULT_CONFIG)
+  // Ensure all expected keys exist (for migration from older config versions)
+  return {
+    github: { ...DEFAULT_CONFIG.github, ...saved.github },
+    jira: { ...DEFAULT_CONFIG.jira, ...saved.jira },
+    openrouter: { ...DEFAULT_CONFIG.openrouter, ...saved.openrouter },
+    preferences: { ...DEFAULT_CONFIG.preferences, ...saved.preferences },
+  }
 }
 
 export async function saveConfig(config: Partial<AppConfig>): Promise<AppConfig> {
@@ -88,6 +112,7 @@ export async function saveConfig(config: Partial<AppConfig>): Promise<AppConfig>
     ...current,
     ...config,
     github: { ...current.github, ...config.github },
+    jira: { ...current.jira, ...config.jira },
     openrouter: { ...current.openrouter, ...config.openrouter },
     preferences: { ...current.preferences, ...config.preferences },
   }
@@ -219,6 +244,58 @@ export async function deleteNote(id: string): Promise<void> {
   const store = await readJsonFile(FILES.notes, DEFAULT_NOTES)
   store.notes = store.notes.filter(n => n.id !== id)
   await writeJsonFile(FILES.notes, store)
+}
+
+// ============== JIRA Cache Storage ==============
+
+export interface JiraActivity {
+  id: string
+  type: 'issue' | 'transition' | 'worklog' | 'comment'
+  issueKey: string
+  issueSummary: string
+  project: string
+  date: string
+  url: string
+  details?: {
+    fromStatus?: string
+    toStatus?: string
+    timeSpent?: string
+    commentBody?: string
+  }
+}
+
+export interface JiraCache {
+  lastSync: string | null
+  activities: JiraActivity[]
+}
+
+const DEFAULT_JIRA_CACHE: JiraCache = {
+  lastSync: null,
+  activities: [],
+}
+
+export async function getJiraCache(): Promise<JiraCache> {
+  return readJsonFile(FILES.jiraCache, DEFAULT_JIRA_CACHE)
+}
+
+export async function saveJiraCache(cache: JiraCache): Promise<void> {
+  await writeJsonFile(FILES.jiraCache, cache)
+}
+
+export async function addJiraActivities(activities: JiraActivity[]): Promise<void> {
+  const cache = await getJiraCache()
+  
+  // Merge activities, avoiding duplicates by ID
+  const existingIds = new Set(cache.activities.map(a => a.id))
+  const newActivities = activities.filter(a => !existingIds.has(a.id))
+  
+  cache.activities = [...newActivities, ...cache.activities]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 500) // Keep last 500 activities
+  
+  cache.lastSync = new Date().toISOString()
+  
+  await saveJiraCache(cache)
 }
 
 // Export file paths for debugging

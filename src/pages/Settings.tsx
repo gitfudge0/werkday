@@ -13,7 +13,8 @@ import {
   Loader2,
   Trash2,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Ticket
 } from 'lucide-react'
 
 interface Organization {
@@ -35,6 +36,25 @@ interface GitHubConfig {
   username: string
   organizations: string[]
   repositories: string[]
+}
+
+interface JiraProject {
+  id: string
+  key: string
+  name: string
+  avatarUrls?: {
+    '48x48': string
+    '24x24': string
+    '16x16': string
+    '32x32': string
+  }
+}
+
+interface JiraConfig {
+  domain: string
+  email: string
+  apiToken: string
+  projects: string[]
 }
 
 // Default model - Claude Haiku 4.5 for fast, cost-effective summaries
@@ -62,6 +82,23 @@ export function Settings() {
   // GitHub save state
   const [isSavingGitHub, setIsSavingGitHub] = useState(false)
   const [githubSaved, setGithubSaved] = useState(false)
+
+  // JIRA State
+  const [jiraDomain, setJiraDomain] = useState('')
+  const [jiraEmail, setJiraEmail] = useState('')
+  const [jiraToken, setJiraToken] = useState('')
+  const [showJiraToken, setShowJiraToken] = useState(false)
+  const [isJiraValidating, setIsJiraValidating] = useState(false)
+  const [isJiraConnected, setIsJiraConnected] = useState(false)
+  const [jiraConnectionError, setJiraConnectionError] = useState<string | null>(null)
+  const [jiraDisplayName, setJiraDisplayName] = useState<string | null>(null)
+  
+  // JIRA Projects
+  const [jiraProjects, setJiraProjects] = useState<JiraProject[]>([])
+  const [selectedJiraProjects, setSelectedJiraProjects] = useState<string[]>([])
+  const [loadingJiraProjects, setLoadingJiraProjects] = useState(false)
+  const [isSavingJira, setIsSavingJira] = useState(false)
+  const [jiraSaved, setJiraSaved] = useState(false)
 
   // OpenRouter State
   const [openrouterKey, setOpenrouterKey] = useState('')
@@ -112,9 +149,32 @@ export function Settings() {
             setOpenrouterKey(config.openrouter.apiKey)
             setIsOpenrouterConnected(true)
           } else if (config.openrouter?.apiKey === '***') {
-            // Key exists but is masked - just show as connected
+            // Key exists but is masked - show as connected with placeholder
             setIsOpenrouterConnected(true)
-            // Don't set the key - leave input empty
+            setOpenrouterKey('••••••••••••••••••••')
+          }
+        }
+
+        // Load JIRA config
+        const jiraResponse = await fetch('http://localhost:3001/api/jira/config')
+        if (jiraResponse.ok) {
+          const config: JiraConfig = await jiraResponse.json()
+          if (config.domain) {
+            setJiraDomain(config.domain)
+          }
+          if (config.email) {
+            setJiraEmail(config.email)
+          }
+          // Check connection status
+          const jiraStatusResponse = await fetch('http://localhost:3001/api/jira/status')
+          if (jiraStatusResponse.ok) {
+            const status = await jiraStatusResponse.json()
+            if (status.connected) {
+              setIsJiraConnected(true)
+              setJiraDisplayName(status.displayName)
+              setSelectedJiraProjects(config.projects || [])
+              fetchJiraProjects()
+            }
           }
         }
       } catch (error) {
@@ -263,6 +323,11 @@ export function Settings() {
       return
     }
 
+    // Don't save placeholder value
+    if (openrouterKey === '••••••••••••••••••••') {
+      return
+    }
+
     setIsSavingOpenrouter(true)
     setOpenrouterError(null)
 
@@ -304,6 +369,106 @@ export function Settings() {
     }
   }
 
+  // JIRA functions
+  const fetchJiraProjects = async () => {
+    setLoadingJiraProjects(true)
+    try {
+      const response = await fetch('http://localhost:3001/api/jira/projects')
+      if (response.ok) {
+        const projects = await response.json()
+        // Sort projects alphabetically by name
+        const sortedProjects = projects.sort((a: JiraProject, b: JiraProject) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+        )
+        setJiraProjects(sortedProjects)
+      }
+    } catch (error) {
+      console.error('Failed to fetch JIRA projects:', error)
+    } finally {
+      setLoadingJiraProjects(false)
+    }
+  }
+
+  const validateJiraConnection = async () => {
+    if (!jiraDomain.trim() || !jiraEmail.trim() || !jiraToken.trim()) {
+      setJiraConnectionError('Please fill in all fields')
+      return
+    }
+
+    setIsJiraValidating(true)
+    setJiraConnectionError(null)
+
+    try {
+      const response = await fetch('http://localhost:3001/api/jira/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: jiraDomain.trim(),
+          email: jiraEmail.trim(),
+          apiToken: jiraToken.trim()
+        })
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.valid) {
+        setIsJiraConnected(true)
+        setJiraDisplayName(data.displayName)
+        fetchJiraProjects()
+      } else {
+        setJiraConnectionError(data.error || 'Invalid credentials')
+        setIsJiraConnected(false)
+      }
+    } catch (error) {
+      setJiraConnectionError('Failed to validate connection')
+      setIsJiraConnected(false)
+    } finally {
+      setIsJiraValidating(false)
+    }
+  }
+
+  const disconnectJira = async () => {
+    try {
+      await fetch('http://localhost:3001/api/jira/disconnect', { method: 'POST' })
+      setJiraToken('')
+      setIsJiraConnected(false)
+      setJiraDisplayName(null)
+      setJiraProjects([])
+      setSelectedJiraProjects([])
+    } catch (error) {
+      console.error('Failed to disconnect JIRA:', error)
+    }
+  }
+
+  const toggleJiraProjectSelection = (projectKey: string) => {
+    setSelectedJiraProjects(prev =>
+      prev.includes(projectKey)
+        ? prev.filter(p => p !== projectKey)
+        : [...prev, projectKey]
+    )
+  }
+
+  const saveJiraConfig = async () => {
+    setIsSavingJira(true)
+    try {
+      await fetch('http://localhost:3001/api/jira/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: jiraDomain,
+          email: jiraEmail,
+          projects: selectedJiraProjects
+        })
+      })
+      setJiraSaved(true)
+      setTimeout(() => setJiraSaved(false), 2000)
+    } catch (error) {
+      console.error('Failed to save JIRA config:', error)
+    } finally {
+      setIsSavingJira(false)
+    }
+  }
+
   return (
     <main className="flex-1 overflow-y-auto p-6 custom-scrollbar">
       {/* Header */}
@@ -329,23 +494,45 @@ export function Settings() {
           {/* Connection Status Card */}
           <div className="rounded-xl border border-border bg-card p-5">
             {isConnected ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
-                    <Check size={20} className="text-emerald-400" />
+              <div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+                      <Check size={20} className="text-emerald-400" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground">Connected as @{username}</p>
+                      <p className="text-sm text-muted-foreground">Your GitHub activity is being tracked</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-foreground">Connected as @{username}</p>
-                    <p className="text-sm text-muted-foreground">Your GitHub activity is being tracked</p>
-                  </div>
+                  <button
+                    onClick={disconnectGitHub}
+                    className="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-400 transition-colors hover:bg-rose-500/20"
+                  >
+                    <Trash2 size={16} />
+                    Disconnect
+                  </button>
                 </div>
-                <button
-                  onClick={disconnectGitHub}
-                  className="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-400 transition-colors hover:bg-rose-500/20"
-                >
-                  <Trash2 size={16} />
-                  Disconnect
-                </button>
+                
+                {/* Show selected repositories */}
+                {selectedRepos.length > 0 && (
+                  <div className="mt-4 border-t border-border pt-4">
+                    <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                      Tracking {selectedRepos.length} {selectedRepos.length === 1 ? 'repository' : 'repositories'}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedRepos.map((repo) => (
+                        <span
+                          key={repo}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-surface-raised px-2 py-1 text-xs text-foreground"
+                        >
+                          <Folder size={12} className="text-muted-foreground" />
+                          {repo.split('/')[1]}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-3">
@@ -609,6 +796,277 @@ export function Settings() {
               )}
             </div>
           )}
+          </div>
+        </section>
+
+        {/* Divider */}
+        <div className="border-t border-border" />
+
+        {/* JIRA Section */}
+        <section>
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-raised">
+              <Ticket size={20} className="text-foreground" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">JIRA Integration</h2>
+              <p className="text-sm text-muted-foreground">Track issues, status changes, and work logs</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {/* Connection Status Card */}
+            <div className="rounded-xl border border-border bg-card p-5">
+              {isJiraConnected ? (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+                        <Check size={20} className="text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">Connected as {jiraDisplayName}</p>
+                        <p className="text-sm text-muted-foreground">{jiraDomain}.atlassian.net</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={disconnectJira}
+                      className="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-400 transition-colors hover:bg-rose-500/20"
+                    >
+                      <Trash2 size={16} />
+                      Disconnect
+                    </button>
+                  </div>
+                  
+                  {/* Show selected projects */}
+                  {selectedJiraProjects.length > 0 && (
+                    <div className="mt-4 border-t border-border pt-4">
+                      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                        Tracking {selectedJiraProjects.length} {selectedJiraProjects.length === 1 ? 'project' : 'projects'}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedJiraProjects.map((projectKey) => (
+                          <span
+                            key={projectKey}
+                            className="inline-flex items-center gap-1.5 rounded-md bg-surface-raised px-2 py-1 text-xs text-foreground"
+                          >
+                            <Ticket size={12} className="text-muted-foreground" />
+                            {projectKey}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-raised">
+                    <AlertCircle size={20} className="text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Not Connected</p>
+                    <p className="text-sm text-muted-foreground">Add your JIRA credentials below</p>
+                  </div>
+                </div>
+              )}
+
+              {/* JIRA Credentials Input - show when not connected */}
+              {!isJiraConnected && (
+                <div className="mt-5 space-y-4 border-t border-border pt-5">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-foreground">
+                      JIRA Domain
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={jiraDomain}
+                        onChange={(e) => setJiraDomain(e.target.value)}
+                        placeholder="your-company"
+                        className="flex-1 rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      <span className="text-sm text-muted-foreground">.atlassian.net</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-foreground">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      value={jiraEmail}
+                      onChange={(e) => setJiraEmail(e.target.value)}
+                      placeholder="you@company.com"
+                      className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-foreground">
+                      API Token
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showJiraToken ? 'text' : 'password'}
+                        value={jiraToken}
+                        onChange={(e) => setJiraToken(e.target.value)}
+                        placeholder="Your JIRA API token"
+                        className="w-full rounded-lg border border-border bg-background px-4 py-3 pr-20 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowJiraToken(!showJiraToken)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showJiraToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Generate an API token at{' '}
+                      <a
+                        href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline inline-flex items-center gap-1"
+                      >
+                        id.atlassian.com
+                        <ExternalLink size={10} />
+                      </a>
+                    </p>
+                  </div>
+
+                  {jiraConnectionError && (
+                    <div className="flex items-center gap-2 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-400">
+                      <AlertCircle size={16} />
+                      {jiraConnectionError}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={validateJiraConnection}
+                    disabled={isJiraValidating || !jiraDomain.trim() || !jiraEmail.trim() || !jiraToken.trim()}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {isJiraValidating ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        Validating...
+                      </>
+                    ) : (
+                      <>
+                        <Check size={16} />
+                        Connect JIRA
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Project Selection */}
+            {isJiraConnected && (
+              <div className="rounded-xl border border-border bg-card p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-medium text-foreground">Select Projects</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Choose which projects to track
+                    </p>
+                  </div>
+                  <button
+                    onClick={fetchJiraProjects}
+                    disabled={loadingJiraProjects}
+                    className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={loadingJiraProjects ? 'animate-spin' : ''} />
+                    Refresh
+                  </button>
+                </div>
+
+                {loadingJiraProjects ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 size={24} className="animate-spin text-muted-foreground" />
+                  </div>
+                ) : jiraProjects.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border p-6 text-center">
+                    <Ticket size={32} className="mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      No projects found. Make sure you have access to projects in JIRA.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
+                    {jiraProjects.map((project) => (
+                      <label
+                        key={project.id}
+                        className="flex cursor-pointer items-center gap-3 rounded-lg p-2 transition-colors hover:bg-surface-raised"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedJiraProjects.includes(project.key)}
+                          onChange={() => toggleJiraProjectSelection(project.key)}
+                          className="h-4 w-4 rounded border-border bg-background text-primary focus:ring-primary/20"
+                        />
+                        {project.avatarUrls?.['24x24'] ? (
+                          <img
+                            src={project.avatarUrls['24x24']}
+                            alt={project.name}
+                            className="h-6 w-6 rounded"
+                          />
+                        ) : (
+                          <div className="flex h-6 w-6 items-center justify-center rounded bg-primary/10">
+                            <Ticket size={12} className="text-primary" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm text-foreground">{project.name}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">({project.key})</span>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {/* Selected projects summary */}
+                {selectedJiraProjects.length > 0 && (
+                  <div className="mt-4 rounded-lg bg-primary/5 p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">
+                          {selectedJiraProjects.length} projects selected
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Activity from these projects will be included in your summaries
+                        </p>
+                      </div>
+                      <button
+                        onClick={saveJiraConfig}
+                        disabled={isSavingJira}
+                        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {isSavingJira ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            Saving...
+                          </>
+                        ) : jiraSaved ? (
+                          <>
+                            <Check size={16} />
+                            Saved!
+                          </>
+                        ) : (
+                          <>
+                            <Check size={16} />
+                            Save Selection
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </section>
 
