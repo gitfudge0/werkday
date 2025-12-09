@@ -57,7 +57,7 @@ export function JIRA() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date())
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isFetching, setIsFetching] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [displayName, setDisplayName] = useState<string | null>(null)
   const [domain, setDomain] = useState<string | null>(null)
@@ -71,9 +71,12 @@ export function JIRA() {
   })
   const [error, setError] = useState<string | null>(null)
 
-  // Format date for API (YYYY-MM-DD)
+  // Format date for API (YYYY-MM-DD) - using local timezone
   const formatDateForApi = (date: Date): string => {
-    return date.toISOString().split('T')[0]
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
   }
 
   // Format date for display
@@ -94,6 +97,7 @@ export function JIRA() {
   const fetchActivity = useCallback(async () => {
     try {
       setError(null)
+      setIsFetching(true)
       const dateStr = formatDateForApi(selectedDate)
       
       const response = await fetch(
@@ -138,6 +142,8 @@ export function JIRA() {
       setStats(data.summary)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch activity')
+    } finally {
+      setIsFetching(false)
     }
   }, [selectedDate])
 
@@ -172,9 +178,7 @@ export function JIRA() {
   }, [selectedDate, isConnected, fetchActivity])
 
   const handleRefresh = async () => {
-    setIsRefreshing(true)
     await fetchActivity()
-    setIsRefreshing(false)
   }
 
   const handleDateSelect = (date: Date | undefined) => {
@@ -303,10 +307,10 @@ export function JIRA() {
           {/* Refresh Button */}
           <button
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={isFetching}
             className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
           >
-            <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+            <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
             Sync
           </button>
 
