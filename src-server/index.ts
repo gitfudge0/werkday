@@ -57,8 +57,10 @@ const api = new Hono()
 // Check GitHub connection status
 api.get('/github/status', async (c) => {
   const config = await getConfig()
+  // Token must exist and not be the masked placeholder
+  const hasValidToken = !!config.github.token && config.github.token !== '***'
   return c.json({
-    connected: !!config.github.token,
+    connected: hasValidToken,
     username: config.github.username,
     avatarUrl: config.github.avatarUrl
   })
@@ -67,8 +69,10 @@ api.get('/github/status', async (c) => {
 // Get saved GitHub config (without exposing token)
 api.get('/github/config', async (c) => {
   const config = await getConfig()
+  // Check if token is valid (exists and not corrupted)
+  const hasValidToken = !!config.github.token && config.github.token !== '***'
   return c.json({
-    token: config.github.token ? '***' : null,
+    token: hasValidToken ? '***' : null,
     username: config.github.username,
     avatarUrl: config.github.avatarUrl,
     organizations: config.github.organizations,
@@ -81,10 +85,13 @@ api.post('/github/config', async (c) => {
   const body = await c.req.json()
   const config = await getConfig()
   
+  // Don't save masked token values
+  const newToken = (body.token && body.token !== '***') ? body.token : config.github.token
+  
   await saveConfig({
     github: {
       ...config.github,
-      token: body.token ?? config.github.token,
+      token: newToken,
       username: body.username ?? config.github.username,
       avatarUrl: body.avatarUrl ?? config.github.avatarUrl,
       organizations: body.organizations ?? config.github.organizations,
@@ -438,16 +445,18 @@ api.delete('/notes/:id', async (c) => {
 
 api.get('/config', async (c) => {
   const config = await getConfig()
-  // Don't expose sensitive tokens
+  // Don't expose sensitive tokens, but also check for corrupted values
+  const hasValidGithubToken = !!config.github.token && config.github.token !== '***'
+  const hasValidOpenrouterKey = !!config.openrouter.apiKey && config.openrouter.apiKey !== '***'
   return c.json({
     ...config,
     github: {
       ...config.github,
-      token: config.github.token ? '***' : null
+      token: hasValidGithubToken ? '***' : null
     },
     openrouter: {
       ...config.openrouter,
-      apiKey: config.openrouter.apiKey ? '***' : null
+      apiKey: hasValidOpenrouterKey ? '***' : null
     }
   })
 })
@@ -461,9 +470,14 @@ api.post('/config', async (c) => {
 api.post('/config/openrouter', async (c) => {
   const { apiKey, model } = await c.req.json()
   const config = await getConfig()
+  
+  // Don't save masked apiKey values, but allow explicit null to disconnect
+  const newApiKey = apiKey === null ? null : 
+                    (apiKey && apiKey !== '***') ? apiKey : config.openrouter.apiKey
+  
   await saveConfig({
     openrouter: {
-      apiKey: apiKey ?? config.openrouter.apiKey,
+      apiKey: newApiKey,
       model: model ?? config.openrouter.model
     }
   })

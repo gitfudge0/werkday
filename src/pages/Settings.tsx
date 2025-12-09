@@ -79,24 +79,42 @@ export function Settings() {
         const githubResponse = await fetch('http://localhost:3001/api/github/config')
         if (githubResponse.ok) {
           const config: GitHubConfig = await githubResponse.json()
-          if (config.token) {
-            setToken(config.token)
+          // Check if connected (token exists and is not masked placeholder)
+          if (config.token && config.token !== '***' && config.username) {
             setIsConnected(true)
             setUsername(config.username)
             setSelectedOrgs(config.organizations || [])
             setSelectedRepos(config.repositories || [])
-            // Fetch orgs - backend will use stored token
             fetchOrganizations()
+          } else if (config.username) {
+            // Has username but token might be masked - check connection status
+            const statusResponse = await fetch('http://localhost:3001/api/github/status')
+            if (statusResponse.ok) {
+              const status = await statusResponse.json()
+              if (status.connected) {
+                setIsConnected(true)
+                setUsername(status.username)
+                setSelectedOrgs(config.organizations || [])
+                setSelectedRepos(config.repositories || [])
+                fetchOrganizations()
+              }
+            }
           }
+          // Never set token state from API - it's masked
         }
 
         // Load full config for OpenRouter
         const configResponse = await fetch('http://localhost:3001/api/config')
         if (configResponse.ok) {
           const config = await configResponse.json()
-          if (config.openrouter?.apiKey) {
+          // Check if OpenRouter is configured (apiKey exists and is not masked)
+          if (config.openrouter?.apiKey && config.openrouter.apiKey !== '***') {
             setOpenrouterKey(config.openrouter.apiKey)
             setIsOpenrouterConnected(true)
+          } else if (config.openrouter?.apiKey === '***') {
+            // Key exists but is masked - just show as connected
+            setIsOpenrouterConnected(true)
+            // Don't set the key - leave input empty
           }
         }
       } catch (error) {

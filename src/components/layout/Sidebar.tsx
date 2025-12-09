@@ -10,7 +10,6 @@ import {
   Zap,
   Sun,
   Moon,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -24,33 +23,22 @@ interface NavItem {
   href: string
 }
 
-interface Project {
-  name: string
-  initials: string
-  color: string
-}
-
-const navigation: NavItem[] = [
+// Overview section: Dashboard, Summaries, Reports
+const overviewNav: NavItem[] = [
   { icon: <LayoutDashboard size={20} />, label: 'Dashboard', href: '/' },
+  { icon: <FileText size={20} />, label: 'Summaries', href: '/summaries' },
+  { icon: <BarChart3 size={20} />, label: 'Reports', href: '/reports' },
+]
+
+// Sources section: GitHub, JIRA, Notes
+const sourcesNav: NavItem[] = [
   { icon: <GitBranch size={20} />, label: 'GitHub', href: '/github' },
   { icon: <Ticket size={20} />, label: 'JIRA', href: '/jira' },
   { icon: <StickyNote size={20} />, label: 'Notes', href: '/notes' },
 ]
 
-const insights: NavItem[] = [
-  { icon: <FileText size={20} />, label: 'Summaries', href: '/summaries' },
-  { icon: <BarChart3 size={20} />, label: 'Reports', href: '/reports' },
-]
-
-const projects: Project[] = [
-  { name: 'Work Projects', initials: 'WP', color: 'bg-violet-500' },
-  { name: 'Side Projects', initials: 'SP', color: 'bg-pink-500' },
-  { name: 'Learning', initials: 'LN', color: 'bg-amber-500' },
-]
-
 export function Sidebar() {
   const [isDark, setIsDark] = useState(true)
-  const [projectsExpanded, setProjectsExpanded] = useState(true)
   const [isCollapsed, setIsCollapsed] = useState(false)
 
   useEffect(() => {
@@ -147,15 +135,15 @@ export function Sidebar() {
         'flex-1 overflow-y-auto py-4 custom-scrollbar',
         isCollapsed ? 'px-2' : 'px-3'
       )}>
-        {/* Main Navigation */}
+        {/* Overview Section */}
         <div className="mb-6">
           {!isCollapsed && (
             <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Menu
+              Overview
             </p>
           )}
           <ul className="space-y-1">
-            {navigation.map((item) => (
+            {overviewNav.map((item) => (
               <li key={item.href}>
                 <NavLink
                   to={item.href}
@@ -186,158 +174,92 @@ export function Sidebar() {
           </ul>
         </div>
 
-        {/* Insights Section */}
-        <div className="mb-6">
-          {!isCollapsed && (
-            <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Insights
-            </p>
-          )}
-          <ul className="space-y-1">
-            {insights.map((item) => (
-              <li key={item.href}>
-                <NavLink
-                  to={item.href}
-                  className={({ isActive }) =>
-                    cn(
-                      'flex items-center rounded-lg text-sm font-medium transition-all duration-200',
-                      isCollapsed 
-                        ? 'justify-center px-2 py-3' 
-                        : 'gap-3 px-3 py-2.5',
-                      isActive
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-surface-raised hover:text-foreground'
-                    )
-                  }
-                  title={isCollapsed ? item.label : undefined}
-                >
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn('flex-shrink-0', isActive && 'text-primary')}>
-                        {item.icon}
-                      </span>
-                      {!isCollapsed && <span>{item.label}</span>}
-                    </>
-                  )}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Projects Section - Hidden when collapsed */}
-        {!isCollapsed && (
-          <div className="mb-6">
-            <button
-              onClick={() => setProjectsExpanded(!projectsExpanded)}
-              className="mb-2 flex w-full items-center justify-between px-3"
-            >
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Projects
-              </p>
-              <ChevronDown
-                size={14}
-                className={cn(
-                  'text-muted-foreground transition-transform duration-200',
-                  projectsExpanded && 'rotate-180'
-                )}
-              />
-            </button>
-            {projectsExpanded && (
-              <ul className="space-y-1">
-                {projects.map((project, idx) => (
-                  <li key={idx}>
-                    <a
-                      href="#"
-                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-surface-raised hover:text-foreground"
-                    >
-                      <span
-                        className={cn(
-                          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white',
-                          project.color
-                        )}
-                      >
-                        {project.initials}
-                      </span>
-                      <span>{project.name}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {/* Projects Section - Collapsed view (just icons) */}
-        {isCollapsed && (
-          <div className="mb-6">
-            <ul className="space-y-1">
-              {projects.map((project, idx) => (
-                <li key={idx}>
-                  <a
-                    href="#"
-                    className="flex items-center justify-center rounded-lg px-2 py-3 transition-all duration-200 hover:bg-surface-raised"
-                    title={project.name}
-                  >
-                    <span
-                      className={cn(
-                        'flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold text-white',
-                        project.color
-                      )}
-                    >
-                      {project.initials}
-                    </span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Preferences Section */}
+        {/* Sources Section */}
         <div>
           {!isCollapsed && (
             <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Preferences
+              Sources
             </p>
           )}
           <ul className="space-y-1">
-            <li>
-              <button
-                onClick={toggleTheme}
-                className={cn(
-                  'flex w-full items-center rounded-lg text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-surface-raised hover:text-foreground',
-                  isCollapsed ? 'justify-center px-2 py-3' : 'gap-3 px-3 py-2.5'
-                )}
-                title={isCollapsed ? (isDark ? 'Light Mode' : 'Dark Mode') : undefined}
-              >
-                {isDark ? <Sun size={20} /> : <Moon size={20} />}
-                {!isCollapsed && <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>}
-              </button>
-            </li>
-            <li>
-              <NavLink
-                to="/settings"
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center rounded-lg text-sm font-medium transition-all duration-200',
-                    isCollapsed 
-                      ? 'justify-center px-2 py-3' 
-                      : 'gap-3 px-3 py-2.5',
-                    isActive
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-muted-foreground hover:bg-surface-raised hover:text-foreground'
-                  )
-                }
-                title={isCollapsed ? 'Settings' : undefined}
-              >
-                <Settings size={20} />
-                {!isCollapsed && <span>Settings</span>}
-              </NavLink>
-            </li>
+            {sourcesNav.map((item) => (
+              <li key={item.href}>
+                <NavLink
+                  to={item.href}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center rounded-lg text-sm font-medium transition-all duration-200',
+                      isCollapsed 
+                        ? 'justify-center px-2 py-3' 
+                        : 'gap-3 px-3 py-2.5',
+                      isActive
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:bg-surface-raised hover:text-foreground'
+                    )
+                  }
+                  title={isCollapsed ? item.label : undefined}
+                >
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn('flex-shrink-0', isActive && 'text-primary')}>
+                        {item.icon}
+                      </span>
+                      {!isCollapsed && <span>{item.label}</span>}
+                    </>
+                  )}
+                </NavLink>
+              </li>
+            ))}
           </ul>
         </div>
       </nav>
+
+      {/* Preferences Section - Fixed at bottom */}
+      <div className={cn(
+        'border-t border-sidebar-border py-3',
+        isCollapsed ? 'px-2' : 'px-3'
+      )}>
+        {!isCollapsed && (
+          <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Preferences
+          </p>
+        )}
+        <ul className="space-y-1">
+          <li>
+            <button
+              onClick={toggleTheme}
+              className={cn(
+                'flex w-full items-center rounded-lg text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-surface-raised hover:text-foreground',
+                isCollapsed ? 'justify-center px-2 py-3' : 'gap-3 px-3 py-2.5'
+              )}
+              title={isCollapsed ? (isDark ? 'Light Mode' : 'Dark Mode') : undefined}
+            >
+              {isDark ? <Sun size={20} /> : <Moon size={20} />}
+              {!isCollapsed && <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>}
+            </button>
+          </li>
+          <li>
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center rounded-lg text-sm font-medium transition-all duration-200',
+                  isCollapsed 
+                    ? 'justify-center px-2 py-3' 
+                    : 'gap-3 px-3 py-2.5',
+                  isActive
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-surface-raised hover:text-foreground'
+                )
+              }
+              title={isCollapsed ? 'Settings' : undefined}
+            >
+              <Settings size={20} />
+              {!isCollapsed && <span>Settings</span>}
+            </NavLink>
+          </li>
+        </ul>
+      </div>
 
       {/* Bottom Section - Profile & Logout */}
       <div className={cn(
