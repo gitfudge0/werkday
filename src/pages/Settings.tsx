@@ -59,6 +59,10 @@ export function Settings() {
   const [loadingOrgs, setLoadingOrgs] = useState(false)
   const [loadingRepos, setLoadingRepos] = useState<string | null>(null)
 
+  // GitHub save state
+  const [isSavingGitHub, setIsSavingGitHub] = useState(false)
+  const [githubSaved, setGithubSaved] = useState(false)
+
   // OpenRouter State
   const [openrouterKey, setOpenrouterKey] = useState('')
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false)
@@ -194,19 +198,24 @@ export function Settings() {
   }
 
   const saveGitHubConfig = async () => {
+    setIsSavingGitHub(true)
     try {
       await fetch('http://localhost:3001/api/github/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          token,
+          // Don't send token - backend already has it
           username,
           organizations: selectedOrgs,
           repositories: selectedRepos
         })
       })
+      setGithubSaved(true)
+      setTimeout(() => setGithubSaved(false), 2000)
     } catch (error) {
       console.error('Failed to save config:', error)
+    } finally {
+      setIsSavingGitHub(false)
     }
   }
 
@@ -557,10 +566,25 @@ export function Settings() {
                     </div>
                     <button
                       onClick={saveGitHubConfig}
-                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+                      disabled={isSavingGitHub}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
                     >
-                      <Check size={16} />
-                      Save Selection
+                      {isSavingGitHub ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          Saving...
+                        </>
+                      ) : githubSaved ? (
+                        <>
+                          <Check size={16} />
+                          Saved!
+                        </>
+                      ) : (
+                        <>
+                          <Check size={16} />
+                          Save Selection
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
