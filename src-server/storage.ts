@@ -5,11 +5,21 @@ import { existsSync } from 'fs'
 
 // Data directory in user's home folder
 const DATA_DIR = join(homedir(), '.werkday')
+const JIRA_DATA_DIR = join(DATA_DIR, 'jira')
+const GITHUB_DATA_DIR = join(DATA_DIR, 'github')
 
 // Ensure data directory exists
 async function ensureDataDir() {
   if (!existsSync(DATA_DIR)) {
     await mkdir(DATA_DIR, { recursive: true })
+  }
+}
+
+// Ensure source-specific data directories exist
+async function ensureSourceDir(source: 'jira' | 'github') {
+  const dir = source === 'jira' ? JIRA_DATA_DIR : GITHUB_DATA_DIR
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true })
   }
 }
 
@@ -20,6 +30,12 @@ const FILES = {
   jiraCache: join(DATA_DIR, 'jira-cache.json'),
   summaries: join(DATA_DIR, 'summaries.json'),
   notes: join(DATA_DIR, 'notes.json'),
+}
+
+// Get path for date-based data file
+function getDateFilePath(source: 'jira' | 'github', date: string): string {
+  const dir = source === 'jira' ? JIRA_DATA_DIR : GITHUB_DATA_DIR
+  return join(dir, `${date}.json`)
 }
 
 // Generic read/write functions
@@ -301,6 +317,75 @@ export async function addJiraActivities(activities: JiraActivity[]): Promise<voi
   cache.lastSync = new Date().toISOString()
   
   await saveJiraCache(cache)
+}
+
+// ============== Date-based JIRA Storage ==============
+
+export interface JiraDailyData {
+  date: string
+  syncedAt: string
+  activities: JiraActivity[]
+  summary: {
+    issuesWorkedOn: number
+    transitionsMade: number
+    commentsMade: number
+    worklogsAdded: number
+    totalTimeLogged: string | null
+  }
+}
+
+export async function getJiraDailyData(date: string): Promise<JiraDailyData | null> {
+  await ensureSourceDir('jira')
+  const filePath = getDateFilePath('jira', date)
+  
+  try {
+    if (existsSync(filePath)) {
+      const content = await readFile(filePath, 'utf-8')
+      return JSON.parse(content) as JiraDailyData
+    }
+  } catch (error) {
+    console.error(`Error reading JIRA data for ${date}:`, error)
+  }
+  
+  return null
+}
+
+export async function saveJiraDailyData(data: JiraDailyData): Promise<void> {
+  await ensureSourceDir('jira')
+  const filePath = getDateFilePath('jira', data.date)
+  await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8')
+}
+
+// ============== Date-based GitHub Storage ==============
+
+export interface GitHubDailyData {
+  date: string
+  syncedAt: string
+  commits: GitHubActivity[]
+  pullRequests: GitHubActivity[]
+  reviews: GitHubActivity[]
+}
+
+export async function getGitHubDailyData(date: string): Promise<GitHubDailyData | null> {
+  await ensureSourceDir('github')
+  const filePath = getDateFilePath('github', date)
+  
+  try {
+    if (existsSync(filePath)) {
+      const content = await readFile(filePath, 'utf-8')
+      return JSON.parse(content) as GitHubDailyData
+    }
+  } catch (error) {
+    console.error(`Error reading GitHub data for ${date}:`, error)
+  }
+  
+  return null
+}
+
+export async function saveGitHubDailyData(data: GitHubDailyData): Promise<void> {
+  await ensureSourceDir('github')
+  const filePath = getDateFilePath('github', data.date)
+  await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8')
 }
 
 // Export file paths for debugging

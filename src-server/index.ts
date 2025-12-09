@@ -13,9 +13,12 @@ import {
   deleteNote,
   getJiraCache,
   addJiraActivities,
+  getJiraDailyData,
+  saveJiraDailyData,
   type AppConfig,
   type GitHubActivity,
   type JiraActivity,
+  type JiraDailyData,
 } from './storage'
 
 const app = new Hono()
@@ -487,10 +490,61 @@ function extractTextFromADF(adf: any): string {
   return adf.content.map(extractFromNode).join('\n').trim()
 }
 
-// Get JIRA activity for a date
+// Get JIRA activity for a date (reads from local cache only)
 api.get('/jira/activity', async (c) => {
   const config = await getConfig()
   const date = c.req.query('date') || new Date().toISOString().split('T')[0]
+  
+  if (!config.jira.domain || !config.jira.email || !config.jira.apiToken || !config.jira.accountId) {
+    return c.json({ error: 'Not authenticated' }, 401)
+  }
+
+  // Read from local cache
+  const cachedData = await getJiraDailyData(date)
+  
+  if (!cachedData) {
+    // No data synced for this date
+    return c.json({
+      date,
+      synced: false,
+      syncedAt: null,
+      issues: [],
+      transitions: [],
+      comments: [],
+      worklogs: [],
+      summary: {
+        issuesWorkedOn: 0,
+        transitionsMade: 0,
+        commentsMade: 0,
+        worklogsAdded: 0,
+        totalTimeLogged: null,
+      },
+    })
+  }
+
+  // Return cached data
+  const issues = cachedData.activities.filter(a => a.type === 'issue')
+  const transitions = cachedData.activities.filter(a => a.type === 'transition')
+  const comments = cachedData.activities.filter(a => a.type === 'comment')
+  const worklogs = cachedData.activities.filter(a => a.type === 'worklog')
+
+  return c.json({
+    date,
+    synced: true,
+    syncedAt: cachedData.syncedAt,
+    issues,
+    transitions,
+    comments,
+    worklogs,
+    summary: cachedData.summary,
+  })
+})
+
+// Sync JIRA activity for a date (fetches from JIRA API and saves to local cache)
+api.post('/jira/sync', async (c) => {
+  const config = await getConfig()
+  const body = await c.req.json().catch(() => ({}))
+  const date = body.date || new Date().toISOString().split('T')[0]
   
   if (!config.jira.domain || !config.jira.email || !config.jira.apiToken || !config.jira.accountId) {
     return c.json({ error: 'Not authenticated' }, 401)
@@ -508,12 +562,17 @@ api.get('/jira/activity', async (c) => {
     nextDay.setDate(nextDay.getDate() + 1)
     const nextDayStr = nextDay.toISOString().split('T')[0]
 
-    // Build JQL query
-    let jql = `assignee = "${accountId}" AND updated >= "${date}" AND updated < "${nextDayStr}"`
+    // Build JQL query - get ALL issues updated on the date, then filter by who made changes
+    // This catches issues where user made changes but isn't the assignee
+    let jql = `updated >= "${date}" AND updated < "${nextDayStr}"`
     if (projects.length > 0) {
       jql += ` AND project IN (${projects.map(p => `"${p}"`).join(', ')})`
     }
     jql += ' ORDER BY updated DESC'
+
+    // Log the JQL query for debugging
+    console.log('[JIRA Sync] JQL Query:', jql)
+    console.log('[JIRA Sync] Filtering for accountId:', accountId)
 
     // Search for issues updated on the specified date (using new /search/jql API)
     // Include comment and worklog fields
@@ -525,7 +584,7 @@ api.get('/jira/activity', async (c) => {
       'POST',
       {
         jql,
-        maxResults: 50,
+        maxResults: 100,
         fields: ['summary', 'status', 'project', 'updated', 'created', 'comment', 'worklog'],
         expand: 'changelog'
       }
@@ -533,24 +592,17 @@ api.get('/jira/activity', async (c) => {
 
     const activities: JiraActivity[] = []
     const baseUrl = `https://${domain}.atlassian.net`
+    const issuesWithUserActivity = new Set<string>()
 
     for (const issue of searchResult.issues || []) {
-      // Add the issue itself as an activity
-      activities.push({
-        id: `issue-${issue.id}`,
-        type: 'issue',
-        issueKey: issue.key,
-        issueSummary: issue.fields.summary,
-        project: issue.fields.project.key,
-        date: issue.fields.updated,
-        url: `${baseUrl}/browse/${issue.key}`,
-      })
+      let hasUserActivity = false
 
-      // Check changelog for status transitions and other field changes on the target date
+      // Check changelog for changes made by the user on the target date
       if (issue.changelog?.histories) {
         for (const history of issue.changelog.histories) {
           const historyDate = new Date(history.created).toISOString().split('T')[0]
           if (historyDate === date && history.author?.accountId === accountId) {
+            hasUserActivity = true
             for (const item of history.items || []) {
               if (item.field === 'status') {
                 activities.push({
@@ -578,6 +630,7 @@ api.get('/jira/activity', async (c) => {
         for (const comment of issue.fields.comment.comments) {
           const commentDate = new Date(comment.created).toISOString().split('T')[0]
           if (commentDate === date && comment.author?.accountId === accountId) {
+            hasUserActivity = true
             const commentText = extractTextFromADF(comment.body)
             activities.push({
               id: `comment-${issue.id}-${comment.id}`,
@@ -601,6 +654,7 @@ api.get('/jira/activity', async (c) => {
         for (const worklog of issue.fields.worklog.worklogs) {
           const worklogDate = new Date(worklog.started).toISOString().split('T')[0]
           if (worklogDate === date && worklog.author?.accountId === accountId) {
+            hasUserActivity = true
             activities.push({
               id: `worklog-${issue.id}-${worklog.id}`,
               type: 'worklog',
@@ -619,10 +673,21 @@ api.get('/jira/activity', async (c) => {
           }
         }
       }
-    }
 
-    // Cache the activities
-    await addJiraActivities(activities)
+      // Add the issue itself if user had any activity on it
+      if (hasUserActivity) {
+        issuesWithUserActivity.add(issue.key)
+        activities.push({
+          id: `issue-${issue.id}`,
+          type: 'issue',
+          issueKey: issue.key,
+          issueSummary: issue.fields.summary,
+          project: issue.fields.project.key,
+          date: issue.fields.updated,
+          url: `${baseUrl}/browse/${issue.key}`,
+        })
+      }
+    }
 
     // Group by type for summary
     const issues = activities.filter(a => a.type === 'issue')
@@ -634,22 +699,41 @@ api.get('/jira/activity', async (c) => {
     const totalTimeSeconds = worklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
     const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
 
+    const summary = {
+      issuesWorkedOn: issuesWithUserActivity.size,
+      transitionsMade: transitions.length,
+      commentsMade: comments.length,
+      worklogsAdded: worklogs.length,
+      totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
+    }
+
+    // Save to local date-based cache
+    const dailyData: JiraDailyData = {
+      date,
+      syncedAt: new Date().toISOString(),
+      activities,
+      summary,
+    }
+    await saveJiraDailyData(dailyData)
+
+    // Also update the legacy cache for backwards compatibility
+    await addJiraActivities(activities)
+
+    console.log('[JIRA Sync] Synced', activities.length, 'activities for', date)
+
     return c.json({
       date,
+      synced: true,
+      syncedAt: dailyData.syncedAt,
       issues,
       transitions,
       comments,
       worklogs,
-      summary: {
-        issuesWorkedOn: new Set(activities.map(a => a.issueKey)).size,
-        transitionsMade: transitions.length,
-        commentsMade: comments.length,
-        worklogsAdded: worklogs.length,
-        totalTimeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null,
-      },
+      summary,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch activity'
+    const message = error instanceof Error ? error.message : 'Failed to sync activity'
+    console.error('[JIRA Sync] Error:', message)
     return c.json({ error: message }, 500)
   }
 })

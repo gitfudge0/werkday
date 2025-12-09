@@ -9,7 +9,6 @@ import {
   AlertCircle,
   Settings,
   Loader2,
-  Clock,
   ArrowRight,
   CalendarIcon,
   MessageSquare,
@@ -40,6 +39,8 @@ interface JiraActivity {
 
 interface ActivityResponse {
   date: string
+  synced: boolean
+  syncedAt: string | null
   issues: JiraActivity[]
   transitions: JiraActivity[]
   comments: JiraActivity[]
@@ -57,8 +58,10 @@ export function JIRA() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date())
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [isFetching, setIsFetching] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
+  const [isSynced, setIsSynced] = useState(false)
+  const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [displayName, setDisplayName] = useState<string | null>(null)
   const [domain, setDomain] = useState<string | null>(null)
   const [activities, setActivities] = useState<JiraActivity[]>([])
@@ -93,11 +96,10 @@ export function JIRA() {
     return format(date, 'MMM d, yyyy')
   }
 
-  // Fetch JIRA activity
+  // Fetch JIRA activity from local cache (does NOT call JIRA API)
   const fetchActivity = useCallback(async () => {
     try {
       setError(null)
-      setIsFetching(true)
       const dateStr = formatDateForApi(selectedDate)
       
       const response = await fetch(
@@ -113,6 +115,22 @@ export function JIRA() {
       }
       
       const data: ActivityResponse = await response.json()
+      
+      setIsSynced(data.synced)
+      setSyncedAt(data.syncedAt)
+      
+      if (!data.synced) {
+        // No data synced for this date
+        setActivities([])
+        setStats({
+          issuesWorkedOn: 0,
+          transitionsMade: 0,
+          commentsMade: 0,
+          worklogsAdded: 0,
+          totalTimeLogged: null
+        })
+        return
+      }
       
       // Combine all activities and sort by date
       const allActivities: JiraActivity[] = [
@@ -142,12 +160,73 @@ export function JIRA() {
       setStats(data.summary)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch activity')
-    } finally {
-      setIsFetching(false)
     }
   }, [selectedDate])
 
-  // Check connection status and fetch initial data
+  // Sync JIRA activity from JIRA API and save to local cache
+  const syncActivity = useCallback(async () => {
+    try {
+      setError(null)
+      setIsSyncing(true)
+      const dateStr = formatDateForApi(selectedDate)
+      
+      const response = await fetch(
+        'http://localhost:3001/api/jira/sync',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: dateStr })
+        }
+      )
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          setIsConnected(false)
+          return
+        }
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to sync activity')
+      }
+      
+      const data: ActivityResponse = await response.json()
+      
+      setIsSynced(data.synced)
+      setSyncedAt(data.syncedAt)
+      
+      // Combine all activities and sort by date
+      const allActivities: JiraActivity[] = [
+        ...data.issues,
+        ...data.transitions,
+        ...data.comments,
+        ...data.worklogs
+      ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      
+      // Remove duplicate issues (keep other activity types if they exist for the same issue)
+      const seen = new Set<string>()
+      const deduped = allActivities.filter(activity => {
+        // Always keep transitions, comments, worklogs
+        if (activity.type !== 'issue') {
+          seen.add(activity.issueKey)
+          return true
+        }
+        // Only keep issues if we haven't seen any other activity for it
+        if (!seen.has(activity.issueKey)) {
+          seen.add(activity.issueKey)
+          return true
+        }
+        return false
+      })
+      
+      setActivities(deduped)
+      setStats(data.summary)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync activity')
+    } finally {
+      setIsSyncing(false)
+    }
+  }, [selectedDate])
+
+  // Check connection status and fetch initial data from cache
   useEffect(() => {
     const init = async () => {
       setIsLoading(true)
@@ -170,15 +249,15 @@ export function JIRA() {
     init()
   }, [])
 
-  // Refetch when date changes
+  // Read from cache when date changes (does NOT call JIRA API)
   useEffect(() => {
     if (isConnected && !isLoading) {
       fetchActivity()
     }
   }, [selectedDate, isConnected, fetchActivity])
 
-  const handleRefresh = async () => {
-    await fetchActivity()
+  const handleSync = async () => {
+    await syncActivity()
   }
 
   const handleDateSelect = (date: Date | undefined) => {
@@ -304,14 +383,14 @@ export function JIRA() {
         </div>
         
         <div className="flex items-center gap-3">
-          {/* Refresh Button */}
+          {/* Sync Button */}
           <button
-            onClick={handleRefresh}
-            disabled={isFetching}
+            onClick={handleSync}
+            disabled={isSyncing}
             className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
           >
-            <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
-            Sync
+            <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Syncing...' : 'Sync'}
           </button>
 
           {/* Date Picker */}
@@ -403,17 +482,42 @@ export function JIRA() {
       {/* Activity Feed */}
       <div className="rounded-2xl border border-border bg-card">
         <div className="border-b border-border p-4">
-          <h2 className="font-semibold text-foreground">Activity for {formatDateForDisplay(selectedDate)}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-foreground">Activity for {formatDateForDisplay(selectedDate)}</h2>
+            {syncedAt && (
+              <span className="text-xs text-muted-foreground">
+                Synced {formatDistanceToNow(syncedAt)}
+              </span>
+            )}
+          </div>
         </div>
         
-        {activities.length === 0 ? (
+        {!isSynced ? (
+          <div className="flex flex-col items-center justify-center p-12 text-center">
+            <RefreshCw size={32} className="mb-4 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground mb-1">
+              No data synced for {formatDateForDisplay(selectedDate).toLowerCase()}
+            </p>
+            <p className="text-xs text-muted-foreground mb-4">
+              Click the button below to fetch your JIRA activity for this date.
+            </p>
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
+              {isSyncing ? 'Syncing...' : 'Sync Now'}
+            </button>
+          </div>
+        ) : activities.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <Ticket size={32} className="mb-4 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
               No activity found for {formatDateForDisplay(selectedDate).toLowerCase()}.
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Try selecting a different date.
+              You didn't make any changes to JIRA tickets on this date.
             </p>
           </div>
         ) : (
