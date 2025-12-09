@@ -326,9 +326,11 @@ export function JIRA() {
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="end">
               <Calendar
+                key={isCalendarOpen ? 'open' : 'closed'}
                 mode="single"
                 selected={selectedDate}
                 onSelect={handleDateSelect}
+                defaultMonth={selectedDate}
                 disabled={(date) => date > new Date()}
                 initialFocus
               />
