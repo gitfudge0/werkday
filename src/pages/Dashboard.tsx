@@ -103,7 +103,11 @@ export function Dashboard({ serverStatus }: DashboardProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
 
+  // Calculate date range for last 7 days
   const today = new Date().toISOString().split('T')[0]
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+  const fromDate = sevenDaysAgo.toISOString().split('T')[0]
 
   useEffect(() => {
     if (serverStatus === 'running') {
@@ -114,9 +118,9 @@ export function Dashboard({ serverStatus }: DashboardProps) {
   const fetchData = async () => {
     setIsLoading(true)
     try {
-      // Fetch today's summary and 7-day history in parallel
+      // Fetch 7-day summary and history in parallel
       const [summaryRes, historyRes] = await Promise.all([
-        fetch(`http://localhost:3001/api/summary/daily?from=${today}`),
+        fetch(`http://localhost:3001/api/summary/daily?from=${fromDate}&to=${today}`),
         fetch('http://localhost:3001/api/summary/history?days=7')
       ])
       
@@ -140,10 +144,6 @@ export function Dashboard({ serverStatus }: DashboardProps) {
     setIsSyncing(true)
     try {
       // Sync last 7 days of data
-      const sevenDaysAgo = new Date()
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-      const fromDate = sevenDaysAgo.toISOString().split('T')[0]
-      
       await Promise.all([
         fetch(`http://localhost:3001/api/github/activity?since=${fromDate}T00:00:00&cache=false`),
         fetch('http://localhost:3001/api/jira/sync', {
@@ -160,18 +160,14 @@ export function Dashboard({ serverStatus }: DashboardProps) {
     }
   }
 
-  // Calculate totals for today
+  // Calculate totals from 7-day summary
   const totalGitHub = summary ? summary.github.commits + summary.github.pullRequests + summary.github.reviews : 0
   const totalJira = summary ? summary.jira.issuesWorkedOn + summary.jira.transitions + summary.jira.comments + summary.jira.worklogs : 0
   const totalNotes = summary?.notes.count || 0
   const totalActivity = totalGitHub + totalJira + totalNotes
 
-  // Calculate 7-day totals
+  // Use history for detailed breakdown by type
   const weekTotals = history.reduce((acc, day) => ({
-    github: acc.github + day.github,
-    jira: acc.jira + day.jira,
-    notes: acc.notes + day.notes,
-    total: acc.total + day.total,
     commits: acc.commits + day.details.commits,
     pullRequests: acc.pullRequests + day.details.pullRequests,
     reviews: acc.reviews + day.details.reviews,
@@ -180,23 +176,22 @@ export function Dashboard({ serverStatus }: DashboardProps) {
     comments: acc.comments + day.details.comments,
     worklogs: acc.worklogs + day.details.worklogs,
   }), {
-    github: 0, jira: 0, notes: 0, total: 0,
     commits: 0, pullRequests: 0, reviews: 0,
     issues: 0, transitions: 0, comments: 0, worklogs: 0
   })
 
-  // Recent activities (combined and sorted)
+  // Recent activities from 7-day summary (combined and sorted)
   const recentActivities = summary ? [
-    ...summary.github.activities.slice(0, 5).map(a => ({ ...a, source: 'github' as const })),
-    ...summary.jira.activities.slice(0, 5).map(a => ({ ...a, source: 'jira' as const })),
-    ...summary.notes.items.slice(0, 3).map(n => ({ 
+    ...summary.github.activities.slice(0, 10).map(a => ({ ...a, source: 'github' as const })),
+    ...summary.jira.activities.slice(0, 10).map(a => ({ ...a, source: 'jira' as const })),
+    ...summary.notes.items.slice(0, 5).map(n => ({ 
       id: n.id, 
       title: n.title, 
       date: n.updatedAt, 
       source: 'notes' as const,
       type: 'note' as const
     }))
-  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 6) : []
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8) : []
 
   const getActivityIcon = (activity: typeof recentActivities[0]) => {
     if (activity.source === 'github') {
@@ -262,7 +257,7 @@ export function Dashboard({ serverStatus }: DashboardProps) {
         </div>
       ) : (
         <>
-          {/* Week Stats Row */}
+          {/* Stats Row - Last 7 Days */}
           <div className="mb-6 grid gap-4 md:grid-cols-4">
             <div className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center gap-3">
@@ -270,8 +265,8 @@ export function Dashboard({ serverStatus }: DashboardProps) {
                   <Calendar size={20} className="text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">{weekTotals.total}</p>
-                  <p className="text-xs text-muted-foreground">This Week</p>
+                  <p className="text-2xl font-bold text-foreground">{totalActivity}</p>
+                  <p className="text-xs text-muted-foreground">Last 7 Days</p>
                 </div>
               </div>
             </div>
@@ -282,7 +277,7 @@ export function Dashboard({ serverStatus }: DashboardProps) {
                   <GitCommit size={20} className="text-emerald-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">{weekTotals.github}</p>
+                  <p className="text-2xl font-bold text-foreground">{totalGitHub}</p>
                   <p className="text-xs text-muted-foreground">GitHub</p>
                 </div>
               </div>
@@ -297,7 +292,7 @@ export function Dashboard({ serverStatus }: DashboardProps) {
                   <Ticket size={20} className="text-blue-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">{weekTotals.jira}</p>
+                  <p className="text-2xl font-bold text-foreground">{totalJira}</p>
                   <p className="text-xs text-muted-foreground">JIRA</p>
                 </div>
               </div>
@@ -308,16 +303,13 @@ export function Dashboard({ serverStatus }: DashboardProps) {
 
             <div className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10">
-                  <TrendingUp size={20} className="text-violet-400" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
+                  <StickyNote size={20} className="text-amber-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">{totalActivity}</p>
-                  <p className="text-xs text-muted-foreground">Today</p>
+                  <p className="text-2xl font-bold text-foreground">{totalNotes}</p>
+                  <p className="text-xs text-muted-foreground">Notes</p>
                 </div>
-              </div>
-              <div className="mt-2 text-xs text-muted-foreground">
-                {totalGitHub} GitHub, {totalJira} JIRA
               </div>
             </div>
           </div>

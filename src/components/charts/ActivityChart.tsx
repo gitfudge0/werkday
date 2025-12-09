@@ -34,6 +34,22 @@ interface ActivityChartProps {
   height?: number
 }
 
+const CustomLegend = ({ payload }: any) => {
+  return (
+    <div className="flex items-center justify-center gap-6 mb-2">
+      {payload?.map((entry: any, index: number) => (
+        <div key={`legend-${index}`} className="flex items-center gap-1.5">
+          <span 
+            className="h-2 w-2 rounded-full" 
+            style={{ backgroundColor: entry.color }}
+          />
+          <span className="text-xs text-muted-foreground">{entry.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
 
@@ -140,9 +156,7 @@ export function ActivityChart({ data, height = 280 }: ActivityChartProps) {
         <Legend 
           verticalAlign="top"
           height={36}
-          formatter={(value) => (
-            <span className="text-xs text-muted-foreground capitalize">{value}</span>
-          )}
+          content={<CustomLegend />}
         />
         <Area
           type="monotone"

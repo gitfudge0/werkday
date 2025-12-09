@@ -37,7 +37,7 @@ interface ActivityResponse {
 }
 
 export function GitHub() {
-  const [selectedDate, setSelectedDate] = useState<string>('Today')
+  const [selectedDate, setSelectedDate] = useState<string>('Last 7 Days')
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
