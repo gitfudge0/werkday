@@ -8,8 +8,12 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * Format a date string to a human-readable "time ago" format
  */
-export function formatDistanceToNow(dateString: string): string {
+export function formatDistanceToNow(dateString: string | null | undefined): string {
+  if (!dateString) return ''
+  
   const date = new Date(dateString)
+  if (isNaN(date.getTime())) return ''
+  
   const now = new Date()
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
 
