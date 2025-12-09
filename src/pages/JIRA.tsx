@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { format } from 'date-fns'
 import { 
   Ticket, 
   ArrowRightLeft,
-  ChevronDown,
   RefreshCw,
   ExternalLink,
   AlertCircle,
   Settings,
   Loader2,
-  CheckCircle2,
   Clock,
-  ArrowRight
+  ArrowRight,
+  CalendarIcon
 } from 'lucide-react'
 import { formatDistanceToNow } from '../lib/utils'
+import { Calendar } from '../components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 
 interface JiraActivity {
   id: string
@@ -42,7 +44,8 @@ interface ActivityResponse {
 }
 
 export function JIRA() {
-  const [selectedDate, setSelectedDate] = useState<string>('Today')
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -51,40 +54,34 @@ export function JIRA() {
   const [activities, setActivities] = useState<JiraActivity[]>([])
   const [stats, setStats] = useState({ issuesWorkedOn: 0, transitionsMade: 0 })
   const [error, setError] = useState<string | null>(null)
-  
-  const dateOptions = ['Today', 'Yesterday', 'This Week', 'Last 7 Days']
 
-  // Get date string for API
-  const getDateString = useCallback((option: string): string => {
-    const now = new Date()
-    switch (option) {
-      case 'Today':
-        return now.toISOString().split('T')[0]
-      case 'Yesterday':
-        now.setDate(now.getDate() - 1)
-        return now.toISOString().split('T')[0]
-      case 'This Week':
-        // Start of current week (Sunday)
-        now.setDate(now.getDate() - now.getDay())
-        return now.toISOString().split('T')[0]
-      case 'Last 7 Days':
-        now.setDate(now.getDate() - 7)
-        return now.toISOString().split('T')[0]
-      default:
-        return now.toISOString().split('T')[0]
+  // Format date for API (YYYY-MM-DD)
+  const formatDateForApi = (date: Date): string => {
+    return date.toISOString().split('T')[0]
+  }
+
+  // Format date for display
+  const formatDateForDisplay = (date: Date): string => {
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today'
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday'
     }
-  }, [])
+    return format(date, 'MMM d, yyyy')
+  }
 
   // Fetch JIRA activity
   const fetchActivity = useCallback(async () => {
     try {
       setError(null)
-      const date = getDateString(selectedDate)
+      const dateStr = formatDateForApi(selectedDate)
       
-      // For multi-day ranges, we need to fetch each day
-      // For now, just fetch the single date (API returns activity for that day)
       const response = await fetch(
-        `http://localhost:3001/api/jira/activity?date=${date}`
+        `http://localhost:3001/api/jira/activity?date=${dateStr}`
       )
       
       if (!response.ok) {
@@ -124,7 +121,7 @@ export function JIRA() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch activity')
     }
-  }, [selectedDate, getDateString])
+  }, [selectedDate])
 
   // Check connection status and fetch initial data
   useEffect(() => {
@@ -149,7 +146,7 @@ export function JIRA() {
     init()
   }, [])
 
-  // Refetch when date filter changes
+  // Refetch when date changes
   useEffect(() => {
     if (isConnected && !isLoading) {
       fetchActivity()
@@ -160,6 +157,13 @@ export function JIRA() {
     setIsRefreshing(true)
     await fetchActivity()
     setIsRefreshing(false)
+  }
+
+  const handleDateSelect = (date: Date | undefined) => {
+    if (date) {
+      setSelectedDate(date)
+      setIsCalendarOpen(false)
+    }
   }
 
   const getActivityIcon = (type: string) => {
@@ -265,24 +269,26 @@ export function JIRA() {
             Sync
           </button>
 
-          {/* Date Filter */}
-          <div className="relative">
-            <select
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="appearance-none rounded-lg border border-border bg-card px-4 py-2 pr-10 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50"
-            >
-              {dateOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-            <ChevronDown 
-              size={16} 
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" 
-            />
-          </div>
+          {/* Date Picker */}
+          <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+            <PopoverTrigger asChild>
+              <button
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <CalendarIcon size={16} className="text-muted-foreground" />
+                {formatDateForDisplay(selectedDate)}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="single"
+                selected={selectedDate}
+                onSelect={handleDateSelect}
+                disabled={(date) => date > new Date()}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
@@ -324,17 +330,17 @@ export function JIRA() {
       {/* Activity Feed */}
       <div className="rounded-2xl border border-border bg-card">
         <div className="border-b border-border p-4">
-          <h2 className="font-semibold text-foreground">Recent Activity</h2>
+          <h2 className="font-semibold text-foreground">Activity for {formatDateForDisplay(selectedDate)}</h2>
         </div>
         
         {activities.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <Ticket size={32} className="mb-4 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No activity found for {selectedDate.toLowerCase()}.
+              No activity found for {formatDateForDisplay(selectedDate).toLowerCase()}.
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Try selecting a different time range.
+              Try selecting a different date.
             </p>
           </div>
         ) : (
