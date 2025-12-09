@@ -829,47 +829,25 @@ api.post('/summary/generate', async (c) => {
 
   if (config.openrouter.apiKey && totalActivity > 0) {
     try {
-      const prompt = `Generate a professional daily work report for a software developer.
+      const prompt = `Write a brief daily work summary for a software developer.
 
 Date: ${targetDate}
 
-## GitHub Activity
-Commits (${commits.length}):
-${commits.slice(0, 10).map(c => `- ${c.title} (${c.repo})`).join('\n') || 'None'}
+GitHub: ${commits.length} commits, ${prs.length} PRs, ${reviews.length} reviews
+${commits.slice(0, 5).map(c => `- ${c.title}`).join('\n') || ''}
 
-Pull Requests (${prs.length}):
-${prs.slice(0, 5).map(p => `- ${p.title} (${p.repo}) - ${p.status}`).join('\n') || 'None'}
+JIRA: ${jiraIssues.length} issues, ${jiraTransitions.length} status changes, ${totalTimeHours > 0 ? `${totalTimeHours}h logged` : 'no time logged'}
+${jiraIssues.slice(0, 3).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || ''}
 
-Code Reviews (${reviews.length}):
-${reviews.slice(0, 5).map(r => `- ${r.title} (${r.repo})`).join('\n') || 'None'}
-
-## JIRA Activity
-Issues Worked On (${jiraIssues.length}):
-${jiraIssues.slice(0, 5).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n') || 'None'}
-
-Status Transitions (${jiraTransitions.length}):
-${jiraTransitions.slice(0, 5).map(t => `- ${t.issueKey}: ${t.details?.fromStatus} → ${t.details?.toStatus}`).join('\n') || 'None'}
-
-Comments Added: ${jiraComments.length}
-Time Logged: ${totalTimeHours > 0 ? `${totalTimeHours} hours` : 'None'}
-
-## Notes
-Notes Created/Updated (${dayNotes.length}):
-${dayNotes.slice(0, 3).map(n => `- ${n.title}`).join('\n') || 'None'}
+Notes: ${dayNotes.length} updated
 
 ---
 
-Generate a structured daily work report with:
+Write a concise summary (max 150 words) with:
+1. One sentence overview of the day
+2. 3-4 bullet points of key accomplishments
 
-1. **Executive Summary** (2-3 sentences max) - High-level overview of what was accomplished
-
-2. **Key Metrics** - A brief line summarizing the numbers (X commits, Y issues, Z hours logged, etc.)
-
-3. **Highlights** - 3-5 bullet points of the most significant work items
-
-Keep the tone professional, concise, and suitable for sharing with management or using in standups.
-Focus on impact and accomplishments rather than just listing activities.
-Do not use markdown headers in your response, just plain text with bullet points where appropriate.`
+Keep it brief and suitable for a standup. No headers, just plain text.`
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -880,7 +858,7 @@ Do not use markdown headers in your response, just plain text with bullet points
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 500,
+          max_tokens: 250,
         })
       })
 
