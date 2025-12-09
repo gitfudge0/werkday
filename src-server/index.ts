@@ -996,11 +996,18 @@ Notes: ${rangeNotes.length} updated
 
 ---
 
-Write a concise summary (max ${isRange ? '200' : '150'} words) with:
-1. One sentence overview of ${isRange ? 'this period' : 'the day'}
-2. ${isRange ? '4-6' : '3-4'} bullet points of key accomplishments
+Generate a structured work report with these three sections:
 
-Keep it brief and suitable for a standup. No headers, just plain text.`
+**Executive Summary**
+2-3 sentences summarizing the ${isRange ? 'period' : 'day'}'s work and overall progress.
+
+**Highlights**
+${isRange ? '4-6' : '3-5'} bullet points of the most significant accomplishments and work completed.
+
+**Next Steps**
+2-3 bullet points suggesting logical follow-up tasks based on the work done.
+
+Keep it professional and concise. Use markdown formatting with bold headers.`
 
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -1011,7 +1018,7 @@ Keep it brief and suitable for a standup. No headers, just plain text.`
         body: JSON.stringify({
           model: config.openrouter.model,
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: isRange ? 350 : 250,
+          max_tokens: isRange ? 500 : 400,
         })
       })
 

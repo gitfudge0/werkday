@@ -22,6 +22,26 @@ import { formatDistanceToNow } from '@/lib/utils'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
+// Simple markdown to HTML converter for AI reports
+function formatMarkdown(text: string): string {
+  return text
+    // Bold text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Bullet points
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> items in <ul>
+    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+    // Paragraphs (double newlines)
+    .replace(/\n\n/g, '</p><p>')
+    // Single newlines within paragraphs
+    .replace(/\n/g, '<br/>')
+    // Wrap in paragraph
+    .replace(/^(.+)$/, '<p>$1</p>')
+    // Clean up empty paragraphs
+    .replace(/<p><\/p>/g, '')
+    .replace(/<p><br\/><\/p>/g, '')
+}
+
 interface GitHubActivity {
   id: string
   type: 'commit' | 'pr' | 'review'
@@ -458,14 +478,14 @@ export function Summaries() {
                 <div className="p-4">
                   {summary?.aiReport ? (
                     <div className="prose prose-sm prose-invert max-w-none">
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-                        {summary.aiReport}
-                      </p>
+                      <div className="text-sm leading-relaxed text-foreground [&>p]:mb-3 [&>ul]:mb-3 [&>ul]:list-disc [&>ul]:pl-4 [&_strong]:text-foreground [&_li]:mb-1">
+                        <div dangerouslySetInnerHTML={{ __html: formatMarkdown(summary.aiReport) }} />
+                      </div>
                     </div>
                   ) : totalActivity === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <FileText size={32} className="mb-4 text-muted-foreground" />
-                      <p className="text-sm font-medium text-foreground mb-1">No activity for this day</p>
+                      <p className="text-sm font-medium text-foreground mb-1">No activity for this period</p>
                       <p className="text-xs text-muted-foreground">
                         Sync your GitHub and JIRA data to see activity here.
                       </p>
@@ -546,49 +566,6 @@ export function Summaries() {
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Quick Stats */}
-              <div className="rounded-2xl border border-border bg-card p-4">
-                <h3 className="mb-3 font-semibold text-foreground">Breakdown</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Commits</span>
-                    <span className="font-medium text-foreground">{summary?.github.commits || 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Pull Requests</span>
-                    <span className="font-medium text-foreground">{summary?.github.pullRequests || 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Code Reviews</span>
-                    <span className="font-medium text-foreground">{summary?.github.reviews || 0}</span>
-                  </div>
-                  <div className="h-px bg-border" />
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">JIRA Issues</span>
-                    <span className="font-medium text-foreground">{summary?.jira.issuesWorkedOn || 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Status Changes</span>
-                    <span className="font-medium text-foreground">{summary?.jira.transitions || 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Comments</span>
-                    <span className="font-medium text-foreground">{summary?.jira.comments || 0}</span>
-                  </div>
-                  {summary?.jira.timeLogged && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Time Logged</span>
-                      <span className="font-medium text-emerald-400">{summary.jira.timeLogged}</span>
-                    </div>
-                  )}
-                  <div className="h-px bg-border" />
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Notes</span>
-                    <span className="font-medium text-foreground">{summary?.notes.count || 0}</span>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
