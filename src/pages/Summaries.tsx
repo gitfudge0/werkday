@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { DateRange } from 'react-day-picker'
+import { jsPDF } from 'jspdf'
 import { 
   FileText, 
   Sparkles, 
@@ -17,7 +18,8 @@ import {
   TrendingUp,
   CheckCircle2,
   ArrowRight,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
 import { DateRangePicker } from '@/components/ui/date-range-picker'
@@ -92,6 +94,7 @@ export function Summaries() {
   const [summary, setSummary] = useState<DailySummary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasOpenRouter, setHasOpenRouter] = useState(false)
@@ -208,6 +211,253 @@ export function Summaries() {
     }
   }
 
+  const downloadPDF = async () => {
+    if (!dateRange?.from) return
+    
+    setIsDownloading(true)
+    setError(null)
+    
+    try {
+      const fromDate = formatDateForApi(dateRange.from)
+      const toDate = dateRange.to ? formatDateForApi(dateRange.to) : fromDate
+      
+      // Fetch detailed report from API
+      const response = await fetch('http://localhost:3001/api/summary/generate-detailed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromDate, to: toDate })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate report')
+      }
+      
+      const report = await response.json()
+      
+      // Generate PDF
+      const doc = new jsPDF()
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const margin = 20
+      const maxWidth = pageWidth - margin * 2
+      let y = 20
+      
+      // Helper to add text with word wrap and page breaks
+      const addText = (text: string, fontSize: number, isBold = false, color = '#1a1a1a') => {
+        doc.setFontSize(fontSize)
+        doc.setFont('helvetica', isBold ? 'bold' : 'normal')
+        const rgb = hexToRgb(color)
+        doc.setTextColor(rgb.r, rgb.g, rgb.b)
+        const lines = doc.splitTextToSize(text, maxWidth)
+        for (const line of lines) {
+          if (y > 270) {
+            doc.addPage()
+            y = 20
+          }
+          doc.text(line, margin, y)
+          y += fontSize * 0.5
+        }
+        y += 4
+      }
+      
+      const addSection = (title: string) => {
+        if (y > 250) {
+          doc.addPage()
+          y = 20
+        }
+        y += 6
+        addText(title, 14, true, '#4f46e5')
+        y += 2
+      }
+      
+      const addBullet = (text: string, indent = 0) => {
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(50, 50, 50)
+        const bulletX = margin + indent
+        const textX = bulletX + 8
+        const lines = doc.splitTextToSize(text, maxWidth - indent - 8)
+        
+        if (y > 270) {
+          doc.addPage()
+          y = 20
+        }
+        
+        doc.text('•', bulletX, y)
+        for (let i = 0; i < lines.length; i++) {
+          if (y > 270) {
+            doc.addPage()
+            y = 20
+          }
+          doc.text(lines[i], textX, y)
+          y += 5
+        }
+        y += 2
+      }
+      
+      // Helper to convert hex to RGB
+      function hexToRgb(hex: string) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+        return result ? {
+          r: parseInt(result[1], 16),
+          g: parseInt(result[2], 16),
+          b: parseInt(result[3], 16)
+        } : { r: 0, g: 0, b: 0 }
+      }
+      
+      // Title
+      doc.setFontSize(22)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(31, 41, 55)
+      doc.text(report.title, margin, y)
+      y += 10
+      
+      // Date and generated info
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(107, 114, 128)
+      doc.text(`Date Range: ${report.dateRange}`, margin, y)
+      y += 5
+      doc.text(`Generated: ${new Date(report.generatedAt).toLocaleString()}`, margin, y)
+      y += 10
+      
+      // Metrics summary bar
+      doc.setFillColor(249, 250, 251)
+      doc.roundedRect(margin, y, maxWidth, 18, 3, 3, 'F')
+      y += 12
+      doc.setFontSize(9)
+      doc.setTextColor(75, 85, 99)
+      const metricsText = `Total: ${report.metrics.totalActivities} activities  |  GitHub: ${report.metrics.githubTotal}  |  JIRA: ${report.metrics.jiraTotal}  |  Notes: ${report.metrics.notesTotal}${report.metrics.timeLogged ? `  |  Time: ${report.metrics.timeLogged}` : ''}`
+      doc.text(metricsText, margin + 5, y)
+      y += 14
+      
+      // Executive Summary
+      addSection('Executive Summary')
+      addText(report.executiveSummary, 11, false, '#374151')
+      
+      // Key Highlights
+      if (report.highlights.length > 0) {
+        addSection('Key Highlights')
+        for (const highlight of report.highlights) {
+          addBullet(highlight)
+        }
+      }
+      
+      // GitHub Section
+      if (report.metrics.githubTotal > 0) {
+        addSection('GitHub Activity')
+        addText(report.githubSection.summary, 10, false, '#4b5563')
+        
+        if (report.githubSection.commits.length > 0) {
+          y += 2
+          addText('Commits:', 10, true, '#059669')
+          for (const commit of report.githubSection.commits.slice(0, 10)) {
+            addBullet(`${commit.title} (${commit.repo})`, 4)
+          }
+        }
+        
+        if (report.githubSection.pullRequests.length > 0) {
+          y += 2
+          addText('Pull Requests:', 10, true, '#7c3aed')
+          for (const pr of report.githubSection.pullRequests.slice(0, 5)) {
+            addBullet(`${pr.title} [${pr.status}] (${pr.repo})`, 4)
+          }
+        }
+        
+        if (report.githubSection.reviews.length > 0) {
+          y += 2
+          addText('Code Reviews:', 10, true, '#d97706')
+          for (const review of report.githubSection.reviews.slice(0, 5)) {
+            addBullet(`${review.title} (${review.repo})`, 4)
+          }
+        }
+      }
+      
+      // JIRA Section
+      if (report.metrics.jiraTotal > 0) {
+        addSection('JIRA Activity')
+        addText(report.jiraSection.summary, 10, false, '#4b5563')
+        
+        if (report.jiraSection.issues.length > 0) {
+          y += 2
+          addText('Issues Worked On:', 10, true, '#2563eb')
+          for (const issue of report.jiraSection.issues.slice(0, 10)) {
+            addBullet(`${issue.key}: ${issue.summary}`, 4)
+          }
+        }
+        
+        if (report.jiraSection.transitions.length > 0) {
+          y += 2
+          addText('Status Changes:', 10, true, '#7c3aed')
+          for (const transition of report.jiraSection.transitions.slice(0, 8)) {
+            addBullet(`${transition.key}: ${transition.from} → ${transition.to}`, 4)
+          }
+        }
+        
+        if (report.jiraSection.worklogs.length > 0) {
+          y += 2
+          addText('Time Logged:', 10, true, '#059669')
+          for (const worklog of report.jiraSection.worklogs.slice(0, 5)) {
+            addBullet(`${worklog.key}: ${worklog.timeSpent}`, 4)
+          }
+        }
+      }
+      
+      // Notes Section
+      if (report.metrics.notesTotal > 0) {
+        addSection('Notes')
+        addText(report.notesSection.summary, 10, false, '#4b5563')
+        
+        if (report.notesSection.notes.length > 0) {
+          y += 2
+          for (const note of report.notesSection.notes.slice(0, 5)) {
+            addBullet(`${note.title}: ${note.preview}`, 0)
+          }
+        }
+      }
+      
+      // Challenges (if any)
+      if (report.challenges && report.challenges.length > 0) {
+        addSection('Challenges & Blockers')
+        for (const challenge of report.challenges) {
+          addBullet(challenge)
+        }
+      }
+      
+      // Next Steps
+      if (report.nextSteps.length > 0) {
+        addSection('Recommended Next Steps')
+        for (const step of report.nextSteps) {
+          addBullet(step)
+        }
+      }
+      
+      // Conclusion
+      addSection('Conclusion')
+      addText(report.conclusion, 11, false, '#374151')
+      
+      // Footer on last page
+      const pageCount = doc.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.setTextColor(156, 163, 175)
+        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin - 20, 285)
+        doc.text('Generated by Werkday', margin, 285)
+      }
+      
+      // Download
+      const filename = `werkday-report-${fromDate}${toDate !== fromDate ? `-to-${toDate}` : ''}.pdf`
+      doc.save(filename)
+      
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate PDF'
+      setError(message)
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
   // Calculate totals
   const totalGitHub = summary ? summary.github.commits + summary.github.pullRequests + summary.github.reviews : 0
   const totalJira = summary ? summary.jira.issuesWorkedOn + summary.jira.transitions + summary.jira.comments + summary.jira.worklogs : 0
@@ -264,11 +514,26 @@ export function Summaries() {
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Daily Report</h1>
+          <h1 className="text-2xl font-bold text-foreground">Reports</h1>
           <p className="text-muted-foreground">AI-powered summary of your work activity</p>
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Download PDF Button */}
+          <button
+            onClick={downloadPDF}
+            disabled={isDownloading || totalActivity === 0 || !hasOpenRouter}
+            className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
+            title={!hasOpenRouter ? 'Configure OpenRouter API key to generate PDF reports' : totalActivity === 0 ? 'No activity to export' : 'Download detailed PDF report'}
+          >
+            {isDownloading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Download size={16} />
+            )}
+            {isDownloading ? 'Generating...' : 'Download PDF'}
+          </button>
+
           {/* Sync Button */}
           <button
             onClick={syncData}

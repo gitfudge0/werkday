@@ -1185,6 +1185,281 @@ Requirements:
   return c.json(summary)
 })
 
+// Generate a detailed report for PDF export (longer, more comprehensive analysis)
+api.post('/summary/generate-detailed', async (c) => {
+  const body = await c.req.json()
+  const fromDate = body.from || body.date || new Date().toISOString().split('T')[0]
+  const toDate = body.to || fromDate
+  
+  const config = await getConfig()
+
+  // Generate all dates in range
+  const dates: string[] = []
+  const current = new Date(fromDate)
+  const end = new Date(toDate)
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0])
+    current.setDate(current.getDate() + 1)
+  }
+  const isRange = dates.length > 1
+  const dateRangeText = isRange ? `${fromDate} to ${toDate}` : fromDate
+  
+  // === Aggregate GitHub Data ===
+  const githubCache = await getGitHubCache()
+  const rangeStart = new Date(fromDate)
+  rangeStart.setHours(0, 0, 0, 0)
+  const rangeEnd = new Date(toDate)
+  rangeEnd.setHours(23, 59, 59, 999)
+  
+  const githubActivities = githubCache.activities.filter(a => {
+    const actDate = new Date(a.date)
+    return actDate >= rangeStart && actDate <= rangeEnd
+  })
+
+  const commits = githubActivities.filter(a => a.type === 'commit')
+  const prs = githubActivities.filter(a => a.type === 'pr')
+  const reviews = githubActivities.filter(a => a.type === 'review')
+
+  // === Aggregate JIRA Data ===
+  let allJiraActivities: JiraActivity[] = []
+  for (const date of dates) {
+    const jiraData = await getJiraDailyData(date)
+    if (jiraData?.activities) {
+      allJiraActivities = allJiraActivities.concat(jiraData.activities)
+    }
+  }
+  const jiraIssues = allJiraActivities.filter(a => a.type === 'issue')
+  const jiraTransitions = allJiraActivities.filter(a => a.type === 'transition')
+  const jiraComments = allJiraActivities.filter(a => a.type === 'comment')
+  const jiraWorklogs = allJiraActivities.filter(a => a.type === 'worklog')
+  const totalTimeSeconds = jiraWorklogs.reduce((acc, w) => acc + (w.details?.timeSpentSeconds || 0), 0)
+  const totalTimeHours = Math.round(totalTimeSeconds / 3600 * 10) / 10
+
+  // === Aggregate Notes Data ===
+  const allNotes = await getNotes()
+  const rangeNotes = allNotes.filter(n => {
+    const noteDate = new Date(n.updatedAt).toISOString().split('T')[0]
+    return noteDate >= fromDate && noteDate <= toDate
+  })
+
+  const totalActivity = commits.length + prs.length + reviews.length + 
+    jiraIssues.length + jiraTransitions.length + jiraComments.length + jiraWorklogs.length +
+    rangeNotes.length
+
+  // Detailed structured report
+  let detailedReport: {
+    title: string
+    dateRange: string
+    generatedAt: string
+    executiveSummary: string
+    metrics: {
+      totalActivities: number
+      githubTotal: number
+      jiraTotal: number
+      notesTotal: number
+      timeLogged: string | null
+    }
+    githubSection: {
+      summary: string
+      commits: Array<{ title: string; repo: string; date: string }>
+      pullRequests: Array<{ title: string; repo: string; status: string; date: string }>
+      reviews: Array<{ title: string; repo: string; date: string }>
+    }
+    jiraSection: {
+      summary: string
+      issues: Array<{ key: string; summary: string; project: string }>
+      transitions: Array<{ key: string; from: string; to: string; date: string }>
+      worklogs: Array<{ key: string; timeSpent: string; date: string }>
+    }
+    notesSection: {
+      summary: string
+      notes: Array<{ title: string; preview: string }>
+    }
+    highlights: string[]
+    challenges: string[]
+    nextSteps: string[]
+    conclusion: string
+  } | null = null
+
+  if (!config.openrouter.apiKey) {
+    return c.json({ error: 'OpenRouter API key not configured' }, 400)
+  }
+
+  if (totalActivity === 0) {
+    return c.json({ error: 'No activity found for this date range' }, 400)
+  }
+
+  try {
+    // Build detailed activity context for AI
+    const commitsList = commits.slice(0, 15).map(c => `- ${c.title} (${c.repo})`).join('\n')
+    const prsList = prs.slice(0, 10).map(p => `- ${p.title} [${p.status || 'open'}] (${p.repo})`).join('\n')
+    const reviewsList = reviews.slice(0, 10).map(r => `- ${r.title} (${r.repo})`).join('\n')
+    const jiraList = jiraIssues.slice(0, 10).map(i => `- ${i.issueKey}: ${i.issueSummary}`).join('\n')
+    const transitionsList = jiraTransitions.slice(0, 10).map(t => 
+      `- ${t.issueKey}: ${t.details?.fromStatus} -> ${t.details?.toStatus}`
+    ).join('\n')
+    const notesList = rangeNotes.slice(0, 5).map(n => `- ${n.title}: ${n.content.substring(0, 100)}...`).join('\n')
+
+    const prompt = `You are generating a detailed professional work report for a developer. Based on this activity data, create a comprehensive analysis.
+
+DATE RANGE: ${dateRangeText}
+
+=== GITHUB ACTIVITY ===
+Commits (${commits.length}):
+${commitsList || 'None'}
+
+Pull Requests (${prs.length}):
+${prsList || 'None'}
+
+Code Reviews (${reviews.length}):
+${reviewsList || 'None'}
+
+=== JIRA ACTIVITY ===
+Issues Worked On (${jiraIssues.length}):
+${jiraList || 'None'}
+
+Status Transitions (${jiraTransitions.length}):
+${transitionsList || 'None'}
+
+Time Logged: ${totalTimeHours > 0 ? `${totalTimeHours} hours` : 'None'}
+
+=== NOTES ===
+Notes Updated (${rangeNotes.length}):
+${notesList || 'None'}
+
+Generate a JSON response with this EXACT structure (no markdown, just JSON):
+{
+  "executiveSummary": "A 3-4 sentence professional executive summary of the work accomplished. Be specific about what was done, not just metrics.",
+  "githubSummary": "2-3 sentences describing the GitHub development work, including key features or fixes implemented.",
+  "jiraSummary": "2-3 sentences describing the JIRA-tracked work, project progress, and task management.",
+  "notesSummary": "1-2 sentences about documentation or notes work, or 'No notes were updated during this period.' if none.",
+  "highlights": ["Specific accomplishment 1 with context", "Specific accomplishment 2 with context", "Specific accomplishment 3 with context", "Specific accomplishment 4 with context"],
+  "challenges": ["Challenge or blocker 1 if apparent from the data", "Challenge 2 if apparent"],
+  "nextSteps": ["Logical next step 1 based on work done", "Logical next step 2", "Logical next step 3"],
+  "conclusion": "A 2-3 sentence professional conclusion summarizing productivity and focus areas."
+}
+
+IMPORTANT:
+- Be specific and reference actual work items from the data
+- highlights should be 4-6 items for multi-day reports
+- challenges can be empty array if no obvious blockers
+- Focus on accomplishments and impact, not just activity counts`
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.openrouter.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.openrouter.model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 1000
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      console.error('[Detailed Report] API error:', response.status, errorData)
+      return c.json({ error: 'Failed to generate AI report' }, 500)
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) {
+      return c.json({ error: 'Empty response from AI' }, 500)
+    }
+
+    // Parse AI response
+    let aiResponse
+    try {
+      let cleanJson = content.trim()
+      cleanJson = cleanJson.replace(/```json\n?/g, '').replace(/```\n?/g, '')
+      const jsonMatch = cleanJson.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        cleanJson = jsonMatch[0]
+      }
+      aiResponse = JSON.parse(cleanJson)
+    } catch (e) {
+      console.error('[Detailed Report] Failed to parse JSON:', e)
+      console.error('[Detailed Report] Raw content:', content.substring(0, 500))
+      return c.json({ error: 'Failed to parse AI response' }, 500)
+    }
+
+    // Build the full detailed report
+    detailedReport = {
+      title: isRange ? 'Work Activity Report' : 'Daily Work Report',
+      dateRange: dateRangeText,
+      generatedAt: new Date().toISOString(),
+      executiveSummary: aiResponse.executiveSummary || 'No summary available.',
+      metrics: {
+        totalActivities: totalActivity,
+        githubTotal: commits.length + prs.length + reviews.length,
+        jiraTotal: jiraIssues.length + jiraTransitions.length + jiraComments.length + jiraWorklogs.length,
+        notesTotal: rangeNotes.length,
+        timeLogged: totalTimeHours > 0 ? `${totalTimeHours}h` : null
+      },
+      githubSection: {
+        summary: aiResponse.githubSummary || 'No GitHub activity during this period.',
+        commits: commits.slice(0, 20).map(c => ({
+          title: c.title,
+          repo: c.repo,
+          date: new Date(c.date).toLocaleDateString()
+        })),
+        pullRequests: prs.slice(0, 10).map(p => ({
+          title: p.title,
+          repo: p.repo,
+          status: p.status || 'open',
+          date: new Date(p.date).toLocaleDateString()
+        })),
+        reviews: reviews.slice(0, 10).map(r => ({
+          title: r.title,
+          repo: r.repo,
+          date: new Date(r.date).toLocaleDateString()
+        }))
+      },
+      jiraSection: {
+        summary: aiResponse.jiraSummary || 'No JIRA activity during this period.',
+        issues: jiraIssues.slice(0, 15).map(i => ({
+          key: i.issueKey,
+          summary: i.issueSummary,
+          project: i.project
+        })),
+        transitions: jiraTransitions.slice(0, 15).map(t => ({
+          key: t.issueKey,
+          from: t.details?.fromStatus || '',
+          to: t.details?.toStatus || '',
+          date: new Date(t.date).toLocaleDateString()
+        })),
+        worklogs: jiraWorklogs.slice(0, 10).map(w => ({
+          key: w.issueKey,
+          timeSpent: w.details?.timeSpent || '',
+          date: new Date(w.date).toLocaleDateString()
+        }))
+      },
+      notesSection: {
+        summary: aiResponse.notesSummary || 'No notes were updated during this period.',
+        notes: rangeNotes.slice(0, 10).map(n => ({
+          title: n.title,
+          preview: n.content.substring(0, 150) + (n.content.length > 150 ? '...' : '')
+        }))
+      },
+      highlights: aiResponse.highlights || [],
+      challenges: aiResponse.challenges || [],
+      nextSteps: aiResponse.nextSteps || [],
+      conclusion: aiResponse.conclusion || 'Report generated successfully.'
+    }
+
+    console.log('[Detailed Report] Successfully generated detailed report')
+    return c.json(detailedReport)
+
+  } catch (error) {
+    console.error('[Detailed Report] Error:', error)
+    return c.json({ error: 'Failed to generate detailed report' }, 500)
+  }
+})
+
 // ============== Notes Routes ==============
 
 api.get('/notes', async (c) => {
